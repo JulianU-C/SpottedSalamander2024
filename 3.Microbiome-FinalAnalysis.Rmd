@@ -31,7 +31,7 @@ library(rcompanion)
 library(Hmisc)
 
 
-setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+setwd("path/to/spotted 16s analysis")
 
 featureTab <- otu_table(read.csv("spotted16S_feature_table_final.csv", header = T,
                                  row.names = 1, check.names = F), taxa_are_rows = TRUE)
@@ -542,8 +542,6 @@ ggplot(data = pools_noSubset, aes(x = sample, fill = type)) +
 
 #### Not sure if this agrees with what the alpha diversity is saying, going to export and look
 #write.csv(pools_noSubset, "pools_noSubset.csv")
-
-# Okay looks fine, only duplicate ASVs are in the shared factor, interested as to why there appear to be so many more in bar plots when earlier boxplots say environment is significantly higher richness??? - I guess there are more microbes in the environment, but each salamander is selecting a subset of those and a few unique ones, so while there is on average more variety of microbes in the environment the sals are selecting for additional ones with functional relevance??
 ```
 
 **Anti-Bd ASVs**
@@ -608,10 +606,6 @@ asvs50PctAnti <- merge(antiBdASVs, asvs50Pct_df, by = "ASV", na.rm = TRUE)
 ```
 
 #### Differential abundance
-I want to see if the ASVs in the shared group (b/w environment and sals) is
-differentially abundant, if the shared ASVs are low abundance in environment and 
-higher abundance in sals, this points to selection of rare taxa (I'm pretty sure)
-
 ```{r, ALDEx2}
 ## ALDEx2 - vignette is very good, Penn State One Health has video on youtube
 # https://www.bioconductor.org/packages/devel/bioc/vignettes/ALDEx2/inst/doc/ALDEx2_vignette.html
@@ -712,13 +706,10 @@ hist(aldexAll_whole$effect) # symmetric
 
 hist(aldexAll$diff.btw) # symmetric
 hist(aldexAll$effect) # symmetric
-```
-
-Using ALDEx2, I looked for ASVs that were differentially abundant between
-environmental and salamander samples. Based on a BH-corrected p-value < 0.05 and effect size > 1 or < -1, there were no ASVs that were identified as differentially abundant between the environment and the salamanders (CLR transformed, 128 monte-carlo simulations, gamma = 0.5). 
+``` 
 
 #### Figures for manuscript
-
+##------------------------------------------------------------------------------
 ```{r, figures, warning=FALSE, message=FALSE}
 library(ggplot2)
 library(ggimage)
