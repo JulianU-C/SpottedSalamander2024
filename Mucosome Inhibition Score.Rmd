@@ -6,8 +6,6 @@ editor_options:
   chunk_output_type: console
 ---
 ```{r, echo=FALSE}
-setwd("/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files")
-setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files")
 Bd <- read.csv("LongformAllPlates.csv")
 ```
 
