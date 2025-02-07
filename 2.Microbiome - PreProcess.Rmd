@@ -12,9 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ### Read in data and remove singletons
 ```{r}
-# Spotted/Zeteki 16S PRE-process Data Analysis   ###
-#setwd("/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files")
-setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+# Spotted 16S PRE-process Data Analysis   ###
+setwd("path/to/directory")
 # Load packages
 library(phyloseq)
 library(ape)
@@ -37,7 +36,7 @@ sort(sample_sums(featureTab))
 # Read taxonomy info in, make matrix and compatible for phyloseq
 taxonomy <- tax_table(as.matrix(read.csv("spotted16S_taxonomy.csv", row.names = 1)))
 
-#quantsSpotted <- read.csv("quantsSpotted.csv")
+#quantsSpotted <- read.csv("quantsSpotted.csv") # qubit readings for each sample
 #meta <- read.csv("spot_md.csv")
 #metaSpot <- merge(meta, quantsSpotted, by = c("AmphibianID"))
 #write.csv(metaSpot, file = "spot_mdQuant.csv", row.names = FALSE)
