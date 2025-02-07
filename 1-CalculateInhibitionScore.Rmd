@@ -1,0 +1,197 @@
+---
+title: "1-CalculateInhibitionScore"
+output: html_document
+date: "2024-10-15"
+editor_options: 
+  chunk_output_type: console
+---
+```{r, echo=FALSE}
+setwd("/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files")
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files")
+Bd <- read.csv("LongformAllPlates.csv")
+```
+
+
+### Remove wells
+LOOK at each plate and make sure no contaminates OR extreme outliers within a sample type remove those here so there are notes of which wells were removed. Remove wells with no treatment (ie. no mucosome only Bd). WSBP-17 (Plate 2 2C) was the only well with visible contaminants during the growth assay, all others were not included in the assays if we didn't have enough mucosome sample leftover. NDPC plate 2 11A was excluded as an outlier (> 0.500 OD)
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+Bd <- Bd %>% filter(!(AmphibianID %in% c('AZU-A-11', 'AZU-13',
+                                         'NAT-A-04', 'NAT-A-03', 'ORI-17')),
+                    !(Plate == 2 & Column == 2 & Row == 'C'),
+                    !(Plate == 2 & Column == 10 & Row == c('C', 'D','G','H')),
+                    !(Plate == 2 & Column == 6 & Row == c('D','G','H')),
+                    !(Plate == 2 & Column == 7 & Row == c('D','H')),
+                    !(Plate == 2 & Column == 8 & Row == 'D'),
+                    !(Plate == 2 & Column == 9 & Row == 'H'),
+                    !(Plate == 2 & Column == 11 & Row == 'A'),
+                    !(Plate == 3 & Column == 10 & Row == c('E','F','G','H')),
+                    !(Plate == 3 & Column == 1 & Row == c('D','E','F','G','H')),
+                    !(Plate == 3 & Column == 1 & Row == c('C','D','G','H'))
+                    )
+```
+
+For each plate, For each row in the isol df 
+```{r}
+for(i in 1:nrow(Bd)){
+# Take the OD of the row i and divide by the AveND -1
+# assign it to Inhibit column in isol df
+  Bd$T_OD[i] <-  log((Bd$OD[i] / (1-Bd$OD[i])+1)) 
+  
+}
+```
+  
+### Bd growth plots
+Level off of positive growth seen ~ day 7, we will exclude days 11 and 12 from analysis
+```{r, warning=FALSE}
+# histogram
+hist(Bd$OD, breaks = 30)
+
+# This transformation makes the data more linear, better to fit linear model
+hist(Bd$T_OD, breaks = 30)
+
+# Look at positive control growth
+PC <- Bd[Bd$AmphibianID == c("NDPC", "PC"),]
+
+library(ggplot2)
+
+plot12 <- ggplot(PC, aes(Day, T_OD)) +
+  geom_point(aes(color = AmphibianID)) +
+  geom_smooth(method = loess)
+
+plot12 + facet_grid(~Plate~AmphibianID, scales = "free")
+```
+
+We want to calculate the slope of growth for each well in our assays. We want to take an average of those slopes for each peptide concentration or controls.
+
+Then we want to divide the average slope of each sample-Bd combo by the nutrient-depleted positive control for the specific Bd isolate and then subtract one and we get our inhibition score!!!!!!
+
+Carly's old code she wrote for this also subset within Bd isolates (Muletz-Wolz 2017, Frontiers). Just keeping that code as is, but we only have 1 isolate.
+
+### Manipulate dataset for linear regression
+```{r}
+# First let's merge column and row to make a well column
+Well <- as.factor(paste(Bd$Row, Bd$Column, sep = ""))
+Bd <- cbind(Bd,Well)
+
+# Subset to days based on PC growth
+Bd <- subset(Bd, Day %in% c(0,1,4,5,7))
+
+# Make a column to put in calculated slopes
+Bd$Inhibit_slope <- NA
+
+# specify unique plates
+plate_unique <- unique(Bd$Plate)
+
+# specify our intercept as 0
+intercept = 0  
+```
+
+### Linear model loop
+```{r}
+# For each plate
+for(i in 1:length(plate_unique)){
+  Plate_subset <- subset(Bd, Plate == plate_unique[i]) 
+  iso <- unique(Plate_subset$Isolate)
+  
+  # For each of unique isolates 
+  for(j in 1:length(iso)){
+    # Subset to only that iso i and assign it to a new dataframe isol
+    isol <- subset(Plate_subset, Isolate==iso[j])
+    well <- unique(isol$Well)
+    
+    # For each unique well
+    for(k in 1:length(well)){
+      # Subset to that well and assign it to a new dataframe well_subset
+      well_subset <- subset(isol, Well == well[k])
+      # Make a linear model for each bacteria based on the transformed OD
+      lm_well <- lm(I(well_subset$T_OD - intercept) ~ 0 + well_subset$Day)
+      ## then take the slope and put into appropriate column in isol df
+      ## if we didn't force the intercept slope is in [2]
+      ## well_subset$Inhibit_slope <- lm_well$coefficients[2]
+      well_subset$Inhibit_slope <- lm_well$coefficients[1]
+      well_subset$R_squared <- summary(lm_well)$adj.r.squared
+      well_subset$R_squared <- ifelse(well_subset$R_squared < 0.2, NA,
+                                      well_subset$R_squared)
+      well_subset$Inhibit_slope <- ifelse(well_subset$R_squared < 0.2, NA,
+                                          well_subset$Inhibit_slope) 
+      # Once that is all completed for that unique isolate, assign it into the original df 
+      isol[isol$Well==well[k],"Inhibit_slope"] <- well_subset$Inhibit_slope
+      isol[isol$Well==well[k],"R_squared"] <- well_subset$R_squared
+      ## get the average of ND inhibit_slope
+      aveND <- mean(isol$Inhibit_slope[isol$AmphibianID == "NDPC"])
+      
+      ## for each row in the isol df
+      for(l in 1:nrow(isol)){
+        # Take the inhibit_Slope of the row l and divide by the Avg ND slope and then -1, 
+        # Assign to new column called final_inhibition
+        isol$final_inhibition[l] <- 1- (isol$Inhibit_slope[l]/aveND)
+      }
+    }
+    # Once that is all completed for that unique isolate, assign it into the original df 
+    Plate_subset[Plate_subset$Isolate==iso[j],"Inhibit_slope"] <- isol$Inhibit_slope
+    Plate_subset[Plate_subset$Isolate==iso[j],"final_inhibition"] <- isol$final_inhibition
+    Plate_subset[Plate_subset$Isolate==iso[j],"R_squared"] <- isol$R_squared
+  }
+  Bd[Bd$Plate==plate_unique[i],"Inhibit_slope"] <- Plate_subset$Inhibit_slope
+  Bd[Bd$Plate==plate_unique[i],"final_inhibition"] <- Plate_subset$final_inhibition
+  Bd[Bd$Plate==plate_unique[i],"R_squared"] <- Plate_subset$R_squared
+}
+```
+
+### Write out data .csv
+we have replication of the final_inhibition for every day, need to subset only one day
+```{r}
+write.csv(Bd, "InhibitionScoresAllMucosome.csv")
+
+Bd_scores_2 <- Bd %>% 
+  select(-X, -X.1, -X.2) %>% 
+  filter(Day == 7) %>% 
+  mutate(final_inhibition_percent = final_inhibition * 100)
+
+write.csv(Bd_scores_2, "InhibitionScoresMucosome.csv")
+```
+
+### Check your work!
+```{r}
+# subset to one plate and one well
+Plate_subset <- subset(Bd, Plate == 1) 
+well_subsetA4 <- subset(Plate_subset, Well == 'A4')
+
+lm_wellA4 <- lm(I(well_subsetA4$T_OD - intercept) ~ 0 + well_subsetA4$Day)
+summary(lm_wellA4)
+plot((well_subsetA4$T_OD - intercept) ~ 0 + well_subsetA4$Day)
+
+## Inhibition slope is the coefficient
+lm_wellA4$coefficients[1]
+Inhibit_slopeA4 <- lm_wellA4$coefficients[1]
+summary(lm_wellA4)$adj.r.squared
+aveND <- mean(Plate_subset$Inhibit_slope[Plate_subset$AmphibianID == "NDPC"])
+1  - (Inhibit_slopeA4/aveND)
+
+## plate 1 well A4 should have inhibit slope as 0.0338, inhibition score as -1.777
+## and adjusted r-squared = 0.966
+well_subsetA4
+## We did it!
+
+## Let's do one more random well 
+Plate_subset <- subset(Bd, Plate == 3) 
+well_subsetA4 <- subset(Plate_subset, Well == 'A4')
+
+lm_wellA4 <- lm(I(well_subsetA4$T_OD - intercept) ~ 0 + well_subsetA4$Day)
+summary(lm_wellA4)
+plot((well_subsetA4$T_OD - intercept) ~ 0 + well_subsetA4$Day)
+
+## Inhibition slope is the coefficient
+lm_wellA4$coefficients[1]
+Inhibit_slopeA4 <- lm_wellA4$coefficients[1]
+summary(lm_wellA4)$adj.r.squared
+aveND <- mean(Plate_subset$Inhibit_slope[Plate_subset$AmphibianID == "NDPC"])
+1- (Inhibit_slopeA4/aveND)
+
+## plate 4 well A4 should have inhibit slope as 0.0064, inhibition score as 0.436 
+## and r-squared as 0.9258
+well_subsetA4
+## Confirmed!
+```
+

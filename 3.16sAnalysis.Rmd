@@ -1,0 +1,854 @@
+---
+title: "spotted analysis"
+author: "JUC & Carly Muletz Wolz"
+date: "Today"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#### Colors, plot themes
+
+```{r, echo=FALSE, warning=FALSE, message = FALSE}
+# Colors I like
+stack <- c("#3A5FCD", "#EEAD0E","#858585")
+```
+
+#### Load libraries, set wd, load data
+
+```{r load data, message=F, warning = F, results='hide'}
+library(phyloseq)
+library(ape)
+library(vegan)
+library(ggplot2)
+library(pairwiseAdonis)
+library(car)
+library(magrittr)
+library(dplyr)
+library(gridExtra)
+library(tidyr)
+library(rcompanion)
+library(Hmisc)
+
+
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+
+featureTab <- otu_table(read.csv("spotted16S_feature_table_final.csv", header = T,
+                                 row.names = 1, check.names = F), taxa_are_rows = TRUE)
+dim(featureTab) # 2122 x 42
+
+# Read taxonomy info in, make matrix and compatible for phyloseq
+taxonomy <- tax_table(as.matrix(read.csv("spotted16S_taxonomy.csv", row.names = 1)))
+meta_data <- sample_data(read.csv("spotted16S_meta_Final.csv", header = T, row.names = 1, check.names = F))
+
+# Merge it all together
+g16F4 <- merge_phyloseq(featureTab, taxonomy, meta_data) #seqs) #tree)
+
+# set theme for plots
+theme_set(theme_bw() +
+            theme_classic() + 
+            theme(text = element_text(size = 15)))
+```
+
+#### Data manipulation
+
+```{r, data manip, message=F, warning = F, results='hide'}
+g16F4 # 2122 taxa and 37 samples, 5 samples lost
+sort(sample_sums(g16F4))
+g16F4Rare <- rarefy_even_depth(g16F4, replace = FALSE, rngseed = 13)
+sort(sample_sums(g16F4Rare))
+## FINAL sequence counts = high quality 54,871 (rare) sequences, this is what we report in results section
+sum(sample_sums(g16F4Rare))
+sum(sample_sums(g16F4))
+
+## Make dataframe of metadata for diversity analyses and get info on sample sizes
+df_g16Rare <- as(sample_data(g16F4Rare), "data.frame")
+df_g16 <- as(sample_data(g16F4), "data.frame")
+
+## good to check in same order
+row.names(df_g16)
+sample_names(sample_data(g16F4))
+str(df_g16)
+
+row.names(df_g16Rare)
+sample_names(sample_data(g16F4Rare))
+
+# set variables as factor for analysis
+df_g16$location <- as.factor(df_g16$location)
+df_g16$sample_type <- as.factor(df_g16$sample_type)
+df_g16$sex <- as.factor(df_g16$sex)
+
+df_g16Rare$location <- as.factor(df_g16Rare$location)
+df_g16Rare$sample_type <- as.factor(df_g16Rare$sample_type)
+df_g16Rare$sex <- as.factor(df_g16Rare$sex)
+
+# write out some info on sample sizes
+library(plyr)
+info <- ddply(df_g16Rare, .(location, sample_type, sex), summarize, sampled=length(location))
+info
+#write.csv(info, 'sampleSizesMicrobiomespottedRare.csv')
+
+# subset data by sample type
+sals <- filter(df_g16, sample_type %in% c("individual"))
+env <- filter(df_g16, sample_type %in% c("environmental"))
+
+salsRare <- filter(df_g16Rare, sample_type %in% c("individual"))
+envRare <- filter(df_g16Rare, sample_type %in% c("environmental"))
+
+```
+
+#### Alpha diversity analyses
+
+**Unrarified dataset**
+
+```{r, alpha, warning=FALSE, message=FALSE}
+# Environment vs. Individuals 
+# UNRARIFIED DATA SET (9.6 coverage difference)
+# Quick summary stats
+envSummaryStats <- df_g16 %>% filter(sample_type == "environmental") %>%
+  summarise(meanAntiBdRA = mean(AntiBdRA),
+            sdAntiBdRA  = sd(AntiBdRA),
+            meanRichness = mean(S.obs),
+            sdRichness  = sd(S.obs),
+            meanAntiRich = mean(S.obs_anti),
+            sdAntiRich  = sd(S.obs_anti))
+envSummaryStats
+
+salSummaryStats <- df_g16 %>% filter(sample_type == "individual") %>%
+  summarise(meanAntiBdRA = mean(AntiBdRA),
+            sdAntiBdRA  = sd(AntiBdRA),
+            meanRichness = mean(S.obs),
+            sdRichness  = sd(S.obs),
+            meanAntiRich = mean(S.obs_anti),
+            sdAntiRich  = sd(S.obs_anti))
+salSummaryStats
+
+# look at distribution, transform if necessary
+hist(log10(df_g16$S.obs))
+hist(log10(df_g16$S.obs_anti + 1))
+hist((df_g16$AntiBdRA))
+
+# test for normal distribution
+shapiro.test(log10(df_g16$S.obs)) # p = 0.29
+shapiro.test(log10(df_g16$S.obs_anti + 1)) # p = 0.024
+shapiro.test((df_g16$AntiBdRA)) # p = 0.003
+
+# test for equal variances
+leveneTest(log10(df_g16$S.obs) ~ df_g16$sample_type) # p = 0.47
+leveneTest(log10(df_g16$S.obs_anti + 1) ~ df_g16$sample_type) # p = 0.41
+leveneTest(df_g16$AntiBdRA ~ df_g16$sample_type) # p = 0.26
+
+## t-test
+# hypothesis tests: sample type
+t.test(log10(S.obs) ~ sample_type, data = df_g16, var.equal = TRUE) # p = 0.001
+wilcox.test(log10(S.obs_anti + 1) ~ sample_type, data = df_g16, paired = FALSE) # p = 0.0004
+wilcox.test(df_g16$AntiBdRA ~ df_g16$sample_type, data = df_g16, paired = FALSE) # p = 0.20
+# hypothesis tests: location
+t.test(log10(S.obs) ~ location, data = df_g16, var.equal = TRUE) # p = 0.321
+wilcox.test(log10(S.obs_anti + 1) ~ location, data = df_g16, paired = FALSE) # p = 0.844
+wilcox.test(df_g16$AntiBdRA ~ location, data = df_g16, paired = FALSE) # p = 0.597
+
+## ANOVA
+# sample type is significant, not interaction
+anovaRich <- aov(S.obs ~ sample_type * location, data = df_g16)
+summary(anovaRich)
+
+# sample type is significant, not interaction
+scheirerRayHare(log10(S.obs_anti + 1) ~ sample_type * location, data = df_g16)
+
+# nothing is significant
+scheirerRayHare(AntiBdRA ~ sample_type * location, data = df_g16)
+
+## overall metrics were the same b/w locations
+# sample type is significant, not interaction
+overallRich <- aov(S.obs ~ location, data = df_g16)
+summary(overallRich)
+
+# sample type is significant, not interaction
+scheirerRayHare(log10(S.obs_anti + 1) ~ location, data = df_g16)
+
+# nothing is significant
+scheirerRayHare(AntiBdRA ~ location, data = df_g16)
+```
+
+Unrarefied dataset: Overall richness and anti-Bd richness is higher in vernal pools than salamanders. There is no difference in relative abundance of anti-bd ASVs between sample types. The interaction between sample_type:location is not significant.
+
+**Rarified dataset**
+
+```{r, alphaRare, warning=FALSE, message=FALSE}
+# Environment vs. Individuals 
+# UNRARIFIED DATA SET (9.6 coverage difference)
+
+# look at distribution, transform if necessary
+hist(log10(df_g16Rare$S.obs_rare))
+hist((df_g16Rare$S.obs_antiRare))
+hist((df_g16Rare$AntiBdRARare))
+
+# test for normal distribution
+shapiro.test(log10(df_g16Rare$S.obs_rare)) # p = 0.15
+shapiro.test((df_g16Rare$S.obs_antiRare)) # p = 0.10
+shapiro.test((df_g16Rare$AntiBdRARare)) # p = 0.005
+
+# test for equal variances
+leveneTest(log10(df_g16Rare$S.obs_rare) ~ df_g16Rare$sample_type) # p = 0.21
+leveneTest((df_g16Rare$S.obs_antiRare) ~ df_g16Rare$sample_type) # p = 0.63
+leveneTest(df_g16Rare$AntiBdRARare ~ df_g16Rare$sample_type) # p = 0.35
+
+## hypothesis tests
+t.test(log10(S.obs_rare) ~ sample_type, data = df_g16Rare, var.equal = TRUE) # p = 0.002
+t.test((S.obs_antiRare) ~ sample_type, data = df_g16Rare, var.equal = TRUE) # p = 0.0003
+wilcox.test(df_g16$AntiBdRARare ~ df_g16Rare$sample_type, data = df_g16Rare, paired = FALSE) # p = 0.31
+
+# box plots: richness
+richnessRare <- ggplot(data = df_g16Rare, aes(x = sample_type, y = log10(S.obs_rare))) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("ASV richness (log10)") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+antiRichnessRare <- ggplot(data = df_g16Rare, aes(x = sample_type, y = S.obs_antiRare)) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("Anti-Bd ASV richness (log10+1)") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+antiRARare <- ggplot(data = df_g16Rare, aes(x = sample_type, y = AntiBdRARare)) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("AntiBd Relative Abundance") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+grid.arrange(richnessRare, antiRichnessRare, antiRARare, ncol = 2)
+
+## 2-way ANOVA (or nonparametric equivalent)
+ggplot(df_g16Rare, aes(x = location, y = log10(S.obs_rare), fill = sample_type)) +
+  geom_boxplot(width = 0.5,size = 1)
+ggplot(df_g16Rare, aes(x = location, y = S.obs_antiRare, fill = sample_type)) +
+  geom_boxplot(width = 0.5,size = 1)
+ggplot(df_g16Rare, aes(x = location, y = AntiBdRARare, fill = sample_type)) +
+  geom_boxplot(width = 0.5,size = 1)
+
+# sample type is significant, not interaction
+anovaRichRare <- aov(S.obs_rare ~ sample_type * location, data = df_g16Rare)
+summary(anovaRichRare)
+
+# sample type is significant, not interaction
+scheirerRayHare(log10(S.obs_antiRare + 1) ~ sample_type * location, data = df_g16Rare)
+
+# nothing is significant
+scheirerRayHare(AntiBdRARare ~ sample_type * location, data = df_g16Rare)
+
+grid.arrange(richnessRare, antiRichnessRare, antiRARare, ncol = 2)
+
+```
+
+The rarified data set is in agreement with the unrarified - will report unrarified stats.
+
+#### Beta diversity analyses
+
+**Unrarified data**
+
+```{r, beta, out.width= "75%", warning=FALSE, message=FALSE}
+## Bray curtis
+bc <- phyloseq::distance(g16F4, "bray")
+adonis2(bc ~ sample_type + location + sample_type*location, data = df_g16)
+adonis2(bc ~ sample_type, data = df_g16)
+adonis2(bc ~ location, data = df_g16)
+adonis2(bc ~ collect_date, data = df_g16)
+# bray-curtis; PCoA
+bcOrd <- ordinate(g16F4, "PCoA",bc)
+brayCurtis <- plot_ordination(g16F4, bcOrd, color = "sample_type",
+                              shape = "location") + 
+  geom_point( size = 4) + 
+  scale_color_manual(values = c("#3A5FCD", "#EEAD0E")) +
+  guides(fill = guide_legend(title = c("sample type", "location"))) +
+  labs(tag = "A") +
+  theme(legend.position = "bottom")
+
+## Jaccard; PCoA
+jacc <- phyloseq::distance(g16F4, "jaccard", binary = T)
+adonis2(jacc ~ sample_type + location + sample_type*location, data = df_g16)
+adonis2(jacc ~ location, data = df_g16)
+adonis2(jacc ~ sample_type, data = df_g16)
+jaccOrd <- ordinate(g16F4, method = "PCoA", jacc)
+jaccPlot <- plot_ordination(g16F4, jaccOrd, color = "sample_type",
+                            shape = "location") +
+  geom_point(size = 4) + scale_color_manual(values = c("#3A5FCD", "#EEAD0E")) +
+  theme(legend.position = "none") +
+  labs(tag = "B")
+
+grid.arrange(brayCurtis, jaccPlot, ncol = 2)
+
+```
+
+Unrarified: Bray-curtis and Jaccard distances show a significant effect of sample_type and location and their interaction (R^2^ = 19.2%, F = 2.61 p = 0.001; R^2^ = 13.7%, F = 1.75, p = 0.001).
+
+**Rarified**
+
+```{r, betaRare, out.width= "75%", warning=FALSE, message=FALSE}
+## Bray curtis
+bcR <- phyloseq::distance(g16F4Rare, "bray")
+adonis2(bcR ~ sample_type + location + sample_type*location, data = df_g16Rare)
+
+# bray-curtis; nmds
+bcOrdR <- ordinate(g16F4, "NMDS",bc)
+brayCurtisR <- plot_ordination(g16F4, bcOrd, color = "sample_type",
+                              shape = "location") + 
+  geom_point( size = 4) + 
+  scale_color_manual(values = c("#3A5FCD", "#EEAD0E"))
+
+plot(brayCurtisR)
+
+## Jaccard; PCoA
+jaccR <- phyloseq::distance(g16F4Rare, "jaccard", binary = T)
+adonis2(jaccR ~ sample_type + location + sample_type*location, data = df_g16Rare)
+jaccOrdR <- ordinate(g16F4Rare, method = "PCoA", jacc)
+jaccPlotR <- plot_ordination(g16F4Rare, jaccOrd, color = "sample_type",
+                            shape = "location") +
+  geom_point(size = 4) + scale_color_manual(values = c("#3A5FCD", "#EEAD0E"))
+
+plot(jaccPlotR)
+```
+
+The rarified data set is in agreement with the unrarified - will report unrarified stats
+
+#### FEAST, source tracking
+
+```{r, warning=FALSE, message=FALSE}
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+# Make sure you install FEAST source tracking, and not the beta (as shown in the github)
+# devtools::install_github("cozygene/FEAST", force = TRUE)
+
+# 0. Load necessary packages, load FEAST last
+Packages <- c("Rcpp", "RcppArmadillo", "vegan", "dplyr", "reshape2",
+              "gridExtra", "ggplot2", "ggthemes", "FEAST")
+lapply(Packages, library, character.only = TRUE)
+
+path <- getwd() # shortcut to desired output directory
+
+# 1. create metadata/count matrix file 
+# (meta according to https://github.com/cozygene/FEAST/tree/FEAST_beta)
+#write.csv(g16F4@sam_data[["Row.names.x"]], "metaFeast.csv")
+#write.csv(g16F4@otu_table, "countFeast.csv")
+# make files in excel, save as tab delimited .txt
+metaFeast <- read.table("metaFeast.txt", header = TRUE)
+rownames(metaFeast) <- metaFeast[[1]] # add SampleID as rownames 
+countFeast <- read.table("countFeast.txt")
+countFeast <- as.matrix(t(countFeast)) # transpose & convert to matrix
+
+# 2. Run FEAST w/ default settings (different_sources_flag = 0, for one source type)
+FEAST <- FEAST(C = countFeast, 
+                   metadata = metaFeast,
+                   different_sources_flag = 0,
+                   dir_path = path,
+                   outfile = "FEAST") # _source_contributions_matrix.txt
+
+# 3A. read in output file, do some data wranglin'
+FEAST_out <- read.table("FEAST_source_contributions_matrix.txt", header = TRUE)
+FEAST_out$SampleID <- rownames(FEAST_out)
+FEAST_out$bigPool <- rowSums(FEAST_out[,1:8])
+FEAST_out$smPool <- rowSums(FEAST_out[,9:11])
+FEAST_out$allPool <- rowSums(FEAST_out[,14:15])
+str
+# 3B. convert to longform and subset
+fout <- FEAST_out %>% 
+  pivot_longer(cols = c("Unknown", "bigPool", "smPool", "allPool"),
+               names_to = "source",
+               values_to = "proportion") %>% 
+  select(SampleID, source, proportion) %>% 
+  filter(source %in% c("allPool", "Unknown"))
+
+foutEnv <- fout %>% filter(source %in% c("allPool"))
+foutInd <- fout %>% filter(source %in% c("Unknown"))
+
+# 4a. quick summary stats
+summary(foutInd)
+summary(foutEnv)
+
+# 4b. Heatmap proportion from source plot
+(foutPlot <- ggplot(fout, aes(x = source, y = SampleID, fill = proportion)) + geom_tile(color = "black") +
+  scale_fill_gradient( low = "#3A5FCD", high = "red") +
+  labs(x = "Source", y = "Salamander ID")
+)
+```
+
+According to FEAST, 29% of ASVs on the Salamander come from the environment while 71% are attributed to 'Unknown', which I suspect are ASVs that the salamander is selecting for that are too rare for us to pickup/detect from environmental swabs, possibly those functionally relevant microbes?
+
+#### Shared ASVs
+
+```{r}
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+
+## 1A. Big pool
+psIndBP <- subset_samples(g16F4, 
+                          location == "big pool" & sample_type == "individual")
+psIndBP <- prune_taxa(taxa_sums(psIndBP) > 0, psIndBP)
+psEnvBP <- subset_samples(g16F4,
+                          location == "big pool" & sample_type == "environmental")
+psEnvBP <- prune_taxa(taxa_sums(psEnvBP) > 0, psEnvBP)
+
+length(taxa_names(psIndBP))
+length(taxa_names(psEnvBP))
+
+# 1B. make sal df
+BPshared_sal <- data.frame(intersect(taxa_names(psIndBP), taxa_names(psEnvBP))) %>% 
+  mutate(BPshared_sal, type = c("shared")) %>% 
+  mutate(BPshared_sal, sample = c("Salamander"))
+colnames(BPshared_sal)[1] <-  "ASV"
+
+uniqueIndBP <- data.frame(setdiff(taxa_names(psIndBP), taxa_names(psEnvBP))) %>% 
+  mutate(uniqueIndBP, type = c("sal")) %>% 
+  mutate(sample = c("Salamander"))
+colnames(uniqueIndBP)[1] <-  "ASV"
+
+bigPoolInd <- bind_rows(BPshared_sal, uniqueIndBP)
+
+# 1C. make env df
+BPshared_env <- data.frame(intersect(taxa_names(psIndBP), taxa_names(psEnvBP))) %>% 
+  mutate(BPshared_env, type = c("shared")) %>% 
+  mutate(BPshared_env, sample = c("Environment"))
+colnames(BPshared_env)[1] <-  "ASV"
+
+uniqueEnvBP <- data.frame(setdiff(taxa_names(psEnvBP), taxa_names(psIndBP))) %>% 
+  mutate(type = c("env")) %>% 
+  mutate(sample = c("Environment"))
+colnames(uniqueEnvBP)[1] <-  "ASV"
+
+bigPoolEnv <- bind_rows(BPshared_env, uniqueEnvBP)
+
+# 1D. combine rows
+bigPool <- bind_rows(bigPoolInd, bigPoolEnv)
+
+# 1E. plot to check
+ggplot(data = bigPool, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "ASV count (big pool)") +
+  geom_text(stat = "count", position = "stack", aes(label = after_stat(count)))
+
+
+## 2A. Small pool
+psIndSP <- subset_samples(g16F4Rare, location == "small pool" & sample_type == "individual")
+psIndSP <- prune_taxa(taxa_sums(psIndSP) > 0, psIndSP)
+psEnvSP <- subset_samples(g16F4Rare, location == "small pool" & sample_type == "environmental")
+psEnvSP <- prune_taxa(taxa_sums(psEnvSP) > 0, psEnvSP)
+
+length(taxa_names(psIndSP))
+length(taxa_names(psEnvSP))
+
+# 2B. make sal df
+SPshared_sal <- data.frame(intersect(taxa_names(psIndSP), taxa_names(psEnvSP))) %>% 
+  mutate(SPshared_sal, type = c("shared")) %>% 
+  mutate(SPshared_sal, sample = c("Salamander"))
+colnames(SPshared_sal)[1] <-  "ASV"
+
+uniqueIndSP <- data.frame(setdiff(taxa_names(psIndSP), taxa_names(psEnvSP))) %>% 
+  mutate(uniqueIndSP, type = c("sal")) %>% 
+  mutate(sample = c("Salamander"))
+colnames(uniqueIndSP)[1] <-  "ASV"
+
+smallPoolInd <- bind_rows(SPshared_sal, uniqueIndSP)
+
+# 2C. make env df
+SPshared_env <- data.frame(intersect(taxa_names(psIndSP), taxa_names(psEnvSP))) %>% 
+  mutate(SPshared_env, type = c("shared")) %>% 
+  mutate(SPshared_env, sample = c("Environment"))
+colnames(SPshared_env)[1] <-  "ASV"
+
+uniqueEnvSP <- data.frame(setdiff(taxa_names(psEnvSP), taxa_names(psIndSP))) %>% 
+  mutate(type = c("env")) %>% 
+  mutate(sample = c("Environment"))
+colnames(uniqueEnvSP)[1] <-  "ASV"
+
+smallPoolEnv <- bind_rows(SPshared_env, uniqueEnvSP)
+
+# 2D. combine rows
+smallPool <- bind_rows(smallPoolInd, smallPoolEnv)
+
+# 2E. plot to check
+ggplot(data = smallPool, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "ASV count (small pool)" ) +
+  geom_text(stat = "count", position = "stack", aes(label = ..count..))
+
+## 3. combine dfs
+smallPool <- mutate(smallPool, location = c("Small pool"))
+bigPool <- mutate(bigPool, location = c("Big pool"))
+combinePools <- bind_rows(smallPool, bigPool)
+
+## 4. Presence/absence plot ASV count by location
+combinePoolsPlot <- ggplot(data = combinePools, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "ASV count") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black", "white", "white", "white", "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack) +
+  facet_wrap(~ location) +
+  labs(tag = "A") +
+  theme(legend.position = "bottom")
+
+##### Might need to actually do without subsetting by location, since previous stats already show location is not significant effect on richness/antiRA
+## 1A. Subset by sample_type
+psInd <- subset_samples(g16F4, sample_type == "individual")
+psInd <- prune_taxa(taxa_sums(psInd) > 0, psInd)
+psEnv <- subset_samples(g16F4, sample_type == "environmental")
+psEnv <- prune_taxa(taxa_sums(psEnv) > 0, psEnv)
+
+length(taxa_names(psInd)) # 1633
+length(taxa_names(psEnv)) # 1384
+
+# 1B. make sal df
+sharedSal <- data.frame(intersect(taxa_names(psInd), taxa_names(psEnv))) %>% 
+  mutate(sharedSal, type = c("shared")) %>% 
+  mutate(sharedSal, sample = c("Salamander"))
+colnames(sharedSal)[1] <-  "ASV"
+
+uniqueInd <- data.frame(setdiff(taxa_names(psInd), taxa_names(psEnv))) %>% 
+  mutate(uniqueIndBP, type = c("sal")) %>% 
+  mutate(sample = c("Salamander"))
+colnames(uniqueInd)[1] <-  "ASV"
+
+PoolInd <- bind_rows(sharedSal, uniqueInd)
+
+# 1C. make env df
+sharedEnv <- data.frame(intersect(taxa_names(psInd), taxa_names(psEnv))) %>% 
+  mutate(sharedEnv, type = c("shared")) %>% 
+  mutate(sharedEnv, sample = c("Environment"))
+colnames(sharedEnv)[1] <-  "ASV"
+
+uniqueEnv <- data.frame(setdiff(taxa_names(psEnv), taxa_names(psInd))) %>% 
+  mutate(type = c("env")) %>% 
+  mutate(sample = c("Environment"))
+colnames(uniqueEnv)[1] <-  "ASV"
+
+PoolEnv <- bind_rows(sharedEnv, uniqueEnv)
+
+# 1D. combine rows
+pools_noSubset <- bind_rows(PoolInd, PoolEnv)
+
+# 1E. plot to check
+ggplot(data = pools_noSubset, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "ASV count (presence/absence)") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack)
+
+##### Does the rarefied dataset look the same? (count of unique ASVs in salamanders, alpha stats say there is higher richness in environment)
+
+# Yes it looks the same - higher 'count' of unique ASVs in salamander than environment
+
+#### Not sure if this agrees with what the alpha diversity is saying, going to export and look
+#write.csv(pools_noSubset, "pools_noSubset.csv")
+
+# Okay looks fine, only duplicate ASVs are in the shared factor, interested as to why there appear to be so many more in bar plots when earlier boxplots say environment is significantly higher richness??? - I guess there are more microbes in the environment, but each salamander is selecting a subset of those and a few unique ones, so while there is on average more variety of microbes in the environment the sals are selecting for additional ones with functional relevance??
+```
+
+**Anti-Bd ASVs**
+```{r, warning=FALSE, message=FALSE}
+# 1. Merge pool dataframe with Anti-Bd dataframe, remove blank rows
+antiBdASVs <- read.csv("spotted_blasthits_Bdstrict2020.csv")
+poolAnti <- merge(antiBdASVs, pools_noSubset, by = "ASV", na.rm = TRUE)
+poolAntiLoc <- merge(antiBdASVs, combinePools, by = "ASV", na.rm = TRUE)
+
+# 2a. plot 
+ggplot(data = poolAnti, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "Anti-Bd ASV count") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack)
+
+# 2b. facet by location
+poolAntiLocPlot <- ggplot(data = poolAntiLoc, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack") +
+  labs(x = " ", y = "Anti-Bd ASV count") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black", "white", "white", "white", "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack) +
+  facet_wrap(~ location) + 
+  labs(tag = "B") +
+  theme(legend.position = "none")
+
+grid.arrange(combinePoolsPlot, poolAntiLocPlot)
+
+# Other 
+length(antiBdASVs)  # 48 anti-Bd ASVs
+
+## How many were in every individual? Use phyloseq object with only Sal samples
+otuInd <- otu_table(psInd)
+
+# Convert OTU table to matrix
+otuInd_Mx <- as(otuInd, "matrix")
+
+# Find ASVs that are present in all samples
+asvsAllSals <- rownames(otuInd_Mx)[apply(otuInd_Mx, 1, function(x) all(x > 0))]
+
+# Convert to dataframe
+asvsAllSals <- as.data.frame(asvsAllSals)
+colnames(asvsAllSals)[1] <-  "ASV"
+asvsAllSalsAnti <- merge(antiBdASVs, asvsAllSals, by = "ASV", na.rm = TRUE)
+count(asvsAllSalsAnti) # 0 putative anti-Bd ASVs present in every individual
+
+## How many were in at least half the samples?
+threshold <- 0.5  
+# Calculate the number of samples in which each ASV is present
+asvsPresentPct <- apply(otuInd_Mx, 1, function(x) sum(x > 0) / length(x))
+
+# Identify ASVs that are present in at least 50% of the samples
+asvs50Pct <- rownames(otuInd_Mx)[asvsPresentPct >= threshold]
+
+# Convert to dataframe
+asvs50Pct_df <- as.data.frame(asvs50Pct)
+colnames(asvs50Pct_df)[1] <- "ASV"
+asvs50PctAnti <- merge(antiBdASVs, asvs50Pct_df, by = "ASV", na.rm = TRUE)
+# Damn it's 0 again, not really getting anything cool
+```
+
+#### Differential abundance
+I want to see if the ASVs in the shared group (b/w environment and sals) is
+differentially abundant, if the shared ASVs are low abundance in environment and 
+higher abundance in sals, this points to selection of rare taxa (I'm pretty sure)
+
+```{r, ALDEx2}
+## ALDEx2 - vignette is very good, Penn State One Health has video on youtube
+# https://www.bioconductor.org/packages/devel/bioc/vignettes/ALDEx2/inst/doc/ALDEx2_vignette.html
+library(ALDEx2)
+
+## Shared ASV subset, DA of ASVs by sample_type
+share <- sharedSal$ASV
+sharePS <- prune_taxa(share, g16F4)
+aldexDF <- as.data.frame(otu_table(sharePS)) 
+aldexMatrix <- as.matrix(aldexDF) # matrix (i think it can be a df too)
+aldexGroups <- as.data.frame(sample_data(sharePS)) 
+aldexGroups <- aldexGroups$sample_type # vector
+
+# 1. Vignette recommends gamma be between 0.25 and 1
+aldexOut <- aldex.clr(aldexMatrix, aldexGroups, mc.samples= 128, verbose=F, gamma= 0.5)
+# 2.
+aldexOut_tt <- aldex.ttest(aldexOut, hist.plot=F, paired.test=FALSE, verbose=FALSE)
+# 3.
+aldexEffect <- aldex.effect(aldexOut, CI=T, verbose=F, include.sample.summary=F, paired.test=FALSE)
+# 4. merge into one output for convenience and plot
+aldexAll <- data.frame(aldexOut_tt, aldexEffect)
+
+par(mfrow=c(1,3))
+aldex.plot(aldexAll, type="MA", test = "wilcox" , main='MA plot')
+aldex.plot(aldexAll, type="MW", test="wilcox", main='effect plot')
+aldex.plot(aldexAll, type="volcano", test="wilcox", main='volcano plot')
+
+# 5. Benjamini-hochberg corrected P-value of Wilcoxon test
+row.names(aldexAll %>% filter(wi.eBH < 0.1))
+row.names(aldexAll %>% filter(effect < -1 )) #ASV34
+row.names(aldexAll %>% filter(effect > 1))
+
+## Whole dataset, DA of ASVs by sample_type
+aldexMatrix_whole <- as.matrix(otu_table(g16F4))
+aldexGroups_whole <- as.data.frame(sample_data(g16F4))
+aldexGroups_whole <- aldexGroups_whole$sample_type
+
+# identify which values are significant in both the t-test
+found.by.all <- which(aldexAll$we.eBH < 0.1 & aldexAll$wi.eBH < 0.1)
+# identify which values are significant in fewer than all tests
+found.by.one <- which(aldexAll$we.eBH < 0.1 | aldexAll$wi.eBH < 0.1)
+
+# plot the within and between variation of the data
+plot(aldexAll$diff.win, aldexAll$diff.btw, pch=19, cex=0.3, col=rgb(0,0,0,0.3),
+ xlab="Dispersion", ylab="Difference")
+points(aldexAll$diff.win[found.by.one], aldexAll$diff.btw[found.by.one], pch=19,
+ cex=0.7, col=rgb(0,0,1,0.5))
+points(aldexAll$diff.win[found.by.all], aldexAll$diff.btw[found.by.all], pch=19,
+ cex=0.7, col=rgb(1,0,0,1))
+abline(0,1,lty=2)
+abline(0,-1,lty=2)
+
+
+# 1.
+aldexWhole <- aldex.clr(aldexMatrix_whole, aldexGroups_whole, mc.samples = 128, verbose = F, gamma = 0.5)
+# 2.
+aldexOut_tt <- aldex.ttest(aldexWhole, hist.plot=F, paired.test=FALSE, verbose=FALSE)
+# 3.
+aldexEffect <- aldex.effect(aldexWhole, CI=T, verbose=F, include.sample.summary=F, paired.test=FALSE)
+# 4. merge into one output for convenience and plot
+aldexAll_whole <- data.frame(aldexOut_tt, aldexEffect)
+# 5. Benjamini-hochberg corrected P-value of Wilcoxon test
+row.names(aldexAll_whole %>% filter(wi.eBH < 0.1)) # no ASVs 
+row.names(aldexAll_whole %>% filter(effect > 1 | effect < -1)) # ASV34, ASV53, ASV78
+
+par(mfrow=c(1,3))
+aldex.plot(aldexAll_whole, type="MA", test="welch", main='MA plot')
+aldex.plot(aldexAll_whole, type="MW", test="welch", main='effect plot')
+aldex.plot(aldexAll_whole, type="volcano", test="welch", main='volcano plot')
+
+# identify which values are significant in both the t-test
+found.by.all <- which(aldexAll_whole$we.eBH < 0.1 & aldexAll_whole$wi.eBH < 0.1)
+# identify which values are significant in fewer than all tests
+found.by.one <- which(aldexAll_whole$we.eBH < 0.1 | aldexAll_whole$wi.eBH < 0.1)
+
+# plot the within and between variation of the data
+plot(aldexAll_whole$diff.win, aldexAll_whole$diff.btw, pch=19, cex=0.3, col=rgb(0,0,0,0.3),
+ xlab="Dispersion", ylab="Difference")
+points(aldexAll_whole$diff.win[found.by.one], aldexAll_whole$diff.btw[found.by.one], pch=19,
+ cex=0.7, col=rgb(0,0,1,0.5))
+points(aldexAll_whole$diff.win[found.by.all], aldexAll_whole$diff.btw[found.by.all], pch=19,
+ cex=0.7, col=rgb(1,0,0,1))
+abline(0,1,lty=2)
+abline(0,-1,lty=2)
+
+# Sensitivity analysis (which ASVs are still significant w/ addition of noise ie. higher gamma)
+gamma <- c(1e-03, 0.25, 0.5, 0.75, 1, 2, 3, 4, 5)
+clr <- aldex.clr(aldexMatrix, aldexGroups)
+clrWhole <- aldex.clr(aldexMatrix_whole, aldexGroups_whole)
+sen <- aldex.senAnalysis(aldex_clr = clr, gamma = gamma)
+senWhole <- aldex.senAnalysis(aldex_clr = clrWhole, gamma = gamma)
+plotGamma(sen, thresh = .1)
+plotGamma(senWhole, thresh = .1)
+
+# assessing for asymmetry, values should be centered around 0
+hist(aldexAll_whole$diff.btw) # symmetric
+hist(aldexAll_whole$effect) # symmetric
+
+hist(aldexAll$diff.btw) # symmetric
+hist(aldexAll$effect) # symmetric
+```
+
+Using ALDEx2, I looked for ASVs that were differentially abundant between
+environmental and salamander samples. Based on a BH-corrected p-value < 0.05 and effect size > 1 or < -1, there were no ASVs that were identified as differentially abundant between the environment and the salamanders (CLR transformed, 128 monte-carlo simulations, gamma = 0.5). 
+
+#### Figures for manuscript
+
+```{r, figures, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(ggimage)
+
+## box plots: richness
+## -----------------------------------------------------------------------------
+richness <- ggplot(data = df_g16, aes(x = sample_type, y = log10(S.obs))) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2, color = "#858585") +
+  ylab("ASV richness (log10)") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+antiRichness <- ggplot(data = df_g16, aes(x = sample_type, y = S.obs_anti)) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2, color = "#858585") +
+  ylab("Anti-Bd ASV richness (log10+1)") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+antiRA <- ggplot(data = df_g16, aes(x = sample_type, y = AntiBdRA)) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2, color = "#858585") +
+  ylab("AntiBd Relative Abundance") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+richness
+antiRichness
+antiRA
+grid.arrange(richness, antiRichness, antiRA, ncol = 2)
+
+## 2-way ANOVA (or nonparametric equivalent)
+## ----------------------------------------------------------------------------
+(aovRich <- ggplot(df_g16, aes(x = location, y = S.obs, fill = sample_type)) + 
+    geom_boxplot(width = 0.75, size = 0.5) +
+    scale_fill_manual(values = c("#1C86EE","#FFC125","#1C86EE","#FFC125"),
+                      labels = c("environment", "salamander")) +
+    ylab("ASV richness") +
+    xlab("") +
+    scale_x_discrete(labels = c("Big pool", "Small pool")) +
+    labs(tag = "A") + 
+    theme(legend.position = "none")
+    
+)
+(aovAnti <- ggplot(df_g16, aes(x = location, y = S.obs_anti, fill = sample_type)) +
+    geom_boxplot(width = 0.75, size = 0.5) +
+    scale_fill_manual(values = c("#1C86EE","#FFC125","#1C86EE","#FFC125"),
+                      labels = c("environment", "salamander")) +
+    ylab("Anti-Bd richness") +
+    xlab("") +
+    scale_x_discrete(labels = c("Big pool", "Small pool")) +
+    guides(fill = guide_legend(title = "sample type")) +
+    theme(legend.position = "bottom") +
+    labs(tag = "B")
+)  
+ 
+(aovAntiRA <- ggplot(df_g16, aes(x = location, y = AntiBdRA, fill = sample_type)) +
+    geom_boxplot(width = 0.75, size = 0.5) +
+    scale_fill_manual(values = c("#1C86EE","#FFC125","#1C86EE","#FFC125"),
+                      labels = c("environment", "salamander")) +
+    ylab("Anti-Bd rel. abundance") +
+    xlab("") +
+    scale_x_discrete(labels = c("Big pool", "Small pool")) +
+    labs(tag = "C") + 
+    scale_y_continuous(labels = scales::percent) +
+    theme(legend.position = "none")
+)  
+
+get_legend<-function(aovAnti){
+  tmp <- ggplot_gtable(ggplot_build(aovAnti))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+legend <- get_legend(aovAnti)
+aovAnti <- aovAnti + theme(legend.position = "none")
+
+# Final plot
+grid.arrange(aovRich, aovAnti, aovAntiRA, legend,
+             widths = c(2.8, 2.8),
+             ncol = 2, nrow = 2)
+
+## Shared and Unique ASV plot
+## -----------------------------------------------------------------------------
+combinePoolsPlot <- ggplot(data = combinePools, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(x = " ", y = "ASV count") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black",
+                                                "white", "white", "white",
+                                                "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack, labels = c("environment only", 
+                                               "salamander only", "shared")) +
+  facet_wrap(~ location) +
+  labs(tag = "A") +
+  theme(legend.position = "bottom")
+
+poolAntiLocPlot <- ggplot(data = poolAntiLoc, aes(x = sample, fill = type)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(x = " ", y = "Anti-Bd ASV count") +
+  geom_text(stat = "count", size = 5, color = c("white", "white", "black", 
+                                                "white", "white", "white", 
+                                                "black", "white"),
+            position = position_stack(vjust = 0.5), aes(label = ..count..)) +
+  scale_fill_manual(values = stack) +
+  facet_wrap(~ location) + 
+  labs(tag = "B") +
+  theme(legend.position = "none")
+
+grid.arrange(combinePoolsPlot, poolAntiLocPlot)
+
+## Beta diversity
+## ----------------------------------------------------------------------------
+brayCurtis <- plot_ordination(g16F4, bcOrd, color = "sample_type", shape = "location") + 
+  geom_point( size = 3) + 
+  scale_color_manual(values = c("#3A5FCD", "#EEAD0E"),
+                     labels = c("environment", "salamander")) +
+  guides(fill = guide_legend(title = c("sample type", "location"))) +
+  labs(tag = "A", color = "sample type") +
+  theme(legend.position = "bottom")
+
+jaccPlot <- plot_ordination(g16F4, jaccOrd, color = "sample_type",
+                            shape = "location") +
+  geom_point(size = 3) + scale_color_manual(values = c("#3A5FCD", "#EEAD0E")) +
+  labs(tag = "B") +
+  theme(legend.position = "bottom")
+
+grid.arrange(brayCurtis, jaccPlot, ncol = 1)
+```
+
+
+
