@@ -5,15 +5,12 @@ date: "2024-10-15"
 editor_options: 
   chunk_output_type: console
 ---
-```{r, echo=FALSE}
-Bd <- read.csv("LongformAllPlates.csv")
-```
-
 
 ### Remove wells
 LOOK at each plate and make sure no contaminates OR extreme outliers within a sample type remove those here so there are notes of which wells were removed. Remove wells with no treatment (ie. no mucosome only Bd). WSBP-17 (Plate 2 2C) was the only well with visible contaminants during the growth assay, all others were not included in the assays if we didn't have enough mucosome sample leftover. NDPC plate 2 11A was excluded as an outlier (> 0.500 OD)
 ```{r, warning=FALSE, message=FALSE}
 library(dplyr)
+Bd <- read.csv("LongformAllPlates.csv")
 Bd <- Bd %>% filter(!(AmphibianID %in% c('AZU-A-11', 'AZU-13',
                                          'NAT-A-04', 'NAT-A-03', 'ORI-17')),
                     !(Plate == 2 & Column == 2 & Row == 'C'),
@@ -35,10 +32,8 @@ for(i in 1:nrow(Bd)){
 # Take the OD of the row i and divide by the AveND -1
 # assign it to Inhibit column in isol df
   Bd$T_OD[i] <-  log((Bd$OD[i] / (1-Bd$OD[i])+1)) 
-  
 }
 ```
-  
 ### Bd growth plots
 Level off of positive growth seen ~ day 7, we will exclude days 11 and 12 from analysis
 ```{r, warning=FALSE}
@@ -59,11 +54,8 @@ plot12 <- ggplot(PC, aes(Day, T_OD)) +
 
 plot12 + facet_grid(~Plate~AmphibianID, scales = "free")
 ```
-
 We want to calculate the slope of growth for each well in our assays. We want to take an average of those slopes for each peptide concentration or controls.
-
 Then we want to divide the average slope of each sample-Bd combo by the nutrient-depleted positive control for the specific Bd isolate and then subtract one and we get our inhibition score!!!!!!
-
 Carly's old code she wrote for this also subset within Bd isolates (Muletz-Wolz 2017, Frontiers). Just keeping that code as is, but we only have 1 isolate.
 
 ### Manipulate dataset for linear regression
@@ -192,4 +184,74 @@ aveND <- mean(Plate_subset$Inhibit_slope[Plate_subset$AmphibianID == "NDPC"])
 well_subsetA4
 ## Confirmed!
 ```
+## Figure for manuscript
+##---------------------------------------------------------------------
+## Read and manipulate data set
+```{r}
+# load packages
+library(ggplot2)
+library(ggrepel)
+library(plyr)
+library(dplyr)
+library(tidyr)
 
+inhibit_scores <- read.csv("InhibitionScoresMucosome.csv")
+
+# calculate mean and standard error
+meanInhib_2 <- ddply(inhibit_scores, .(AmphibianID, Plate, Column),
+                   summarize,
+                   mean = mean(final_inhibition_percent))
+
+standard_errors <- ddply(inhibit_scores, .(AmphibianID, Plate, Column),
+                         summarize,
+                         stderr = sd(final_inhibition_percent) / sqrt(length(final_inhibition_percent)),
+sd = sd(final_inhibition_percent))
+
+# merge standard errors with mean inhibition data
+Scores <- merge(meanInhib_2, standard_errors, by = c("AmphibianID",
+                                                     "Plate", "Column"))
+# subset spotted sals and ZAP data
+ScoresSpot <- Scores %>% 
+  filter((Plate == 2 & Column %in% c(1, 2, 3, 4, 5)) | (Plate == 1))
+
+# also want to merge back some of the metadata
+SpotMD <- read.csv("spot_md.csv")
+ScoresSpot$AmphibianID <- gsub("-","", as.character(ScoresSpot$AmphibianID))
+ScoresSpot$AmphibianID <- gsub("F","", as.character(ScoresSpot$AmphibianID))
+Spot1 <- merge(ScoresSpot, SpotMD, by = c("AmphibianID"), all = TRUE)
+
+# filter outlier wells
+Spot <- Spot1 %>% 
+  filter((Spot1$sample_type %in% "individual")) %>% 
+  mutate(location = recode(location, "big pool" = "Big pool", "small pool" = "Small pool")) %>% 
+  filter(!(AmphibianID %in% c("WSBP19", "WSBP14","WSBP15", "WSBP23", "WSBP25", "WSBP26", "WSBP29", "WSSP01", "WSSP02", "WSSP05", "WSSP09")))
+```
+```{r}
+theme_set(theme_classic() +
+            theme(panel.spacing.x = unit(2, "lines")) +
+            theme(axis.text.x = element_text(vjust = 0)) +
+            theme(axis.title.x = element_text(vjust = -1)) +
+            theme(legend.position = "bottom"))
+# colors
+c("#1C86EE","#FFC125")
+c("#7D7D7D", "#575757","#EE6363")
+c("#00B2EE", "#009ACD", "#1E90FF")
+```
+```{r, warning=FALSE}
+# Create the scatter plot with standard error bars
+ggplot(Spot, aes(x = AmphibianID, y = mean)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 0.5)) +
+  theme(axis.title = element_text(size = 20)) +
+  theme(axis.text = element_text(size = 12)) +
+  labs(x = "", y = "Bd Inhibition Score") +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 1.0, color = "gray") +
+  geom_hline(yintercept = -46,linetype = "dashed", linewidth = 1.0, color = "#EE6363") +
+    geom_errorbar(aes(ymin = mean - sd,
+                    ymax = mean + sd),
+                width = 0.3, size = 1, color = "#575757") +
+  geom_point(size = 3.5, color = "#575757") +
+  geom_point(size = 2, color = "#FFC125") +
+  facet_wrap(~ location, scales = "free", ncol = 2) + 
+  scale_shape_discrete(guide = "none") + 
+  theme(strip.text = element_text(size = 15))
+```
