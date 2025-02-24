@@ -1,0 +1,186 @@
+---
+title: "Abundance correlations"
+author: "JUC"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+library(phyloseq)
+library(ape)
+library(vegan)
+library(ggplot2)
+library(pairwiseAdonis)
+library(car)
+library(magrittr)
+library(dplyr)
+library(gridExtra)
+library(tidyr)
+library(rcompanion)
+library(Hmisc)
+
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis")
+
+## Data prep 
+## data ------------------------------------------------------------------------
+featureTab <- otu_table(read.csv("spotted16S_feature_table_final.csv", header = T,
+                                 row.names = 1, check.names = F), taxa_are_rows = TRUE)
+dim(featureTab) # 2122 x 42
+
+# Read taxonomy info in, make matrix and compatible for phyloseq
+taxonomy <- tax_table(as.matrix(read.csv("spotted16S_taxonomy.csv", row.names = 1)))
+meta_data <- sample_data(read.csv("spotted16S_meta_Final.csv", header = T, row.names = 1, check.names = F))
+
+# Merge it all together
+g16F4 <- merge_phyloseq(featureTab, taxonomy, meta_data) #seqs) #tree)
+relAbund <- transform_sample_counts(g16F4, function(x) x / sum(x)) 
+allASVs <- (as.data.frame(otu_table(relAbund)))
+head(allASVs)
+# set theme for plots
+theme_set(theme_bw() +
+            theme_classic() + 
+            theme(text = element_text(size = 15)))
+
+
+```
+
+<br>
+
+*"were performed using (1) all OTUs and (2) abundant OTUs, which was defined as a relative abundance of 0.1% or higher as calculated by adding relative abundance values of host and perch samples."*
+
+<br>
+
+*"we had a global abundance matrix with all skin and perch samples and we added up the abundances of each OTU to determine if in sum, the number of reads represented more than 0.1% of the global reads."*
+
+
+
+```{r}
+## Subset phyloseq object
+## Big pool ------------------------------------------------------------------
+# 1a. subset phyloseq object to big pool & sal and env sample_type
+psSal <- subset_samples(g16F4, sample_type == "individual" & location == "big pool")
+sal_global <- as.data.frame(otu_table(psSal)) # extract ASV table
+sal_global$sampleSum <- rowSums(sal_global) # total abundance of sals
+sal_global$totalCount <- sum(sal_global$sampleSum) # total count of ASVs
+sal_global$GA <- (sal_global$sampleSum / sal_global$totalCount) # global abundance
+head(sal_global)
+
+# 1b. environmental samples
+psEnv <- subset_samples(g16F4, sample_type == "environmental" & location == "big pool")
+env_global <- as.data.frame(otu_table(psEnv))
+env_global$sampleSum <- rowSums(env_global)
+env_global$totalCount <- sum(env_global$sampleSum)
+env_global$GA <- (env_global$sampleSum / env_global$totalCount)
+head(env_global)
+
+# 2. create df with global abundance (GA) in sals and environment
+envGA <- as.data.frame(env_global$GA)
+salGA <- as.data.frame(sal_global$GA)
+bigGA <- cbind(envGA, salGA)
+bigGA <- bigGA %>% 
+  rowwise() %>% 
+  filter(sum(c(`env_global$GA`, `sal_global$GA`)) !=0) # remove ASVs that don't show up in big pool
+head(bigGA)
+plot(bigGA) # plot to check
+
+# 3. Run Kendall correlation on ASV RA
+bigCorTest <- cor.test(bigGA$`env_global$GA`, bigGA$`sal_global$GA`, method = "kendall")
+bigCorTest
+
+## Repeat with the small pool
+## small pool ------------------------------------------------------------------
+# 1a. subset phyloseq object to big pool & sal and env sample_type
+psSalsmall <- subset_samples(g16F4, sample_type == "individual" & location == "small pool")
+sal_globalSm <- as.data.frame(otu_table(psSalsmall)) # extract ASV table
+sal_globalSm$sampleSum <- rowSums(sal_globalSm) # total abundance of sals
+sal_globalSm$totalCount <- sum(sal_globalSm$sampleSum) # total count of ASVs
+sal_globalSm$GA <- (sal_globalSm$sampleSum / sal_globalSm$totalCount) # global abundance
+
+# 1b.
+psEnvsmall <- subset_samples(g16F4, sample_type == "environmental" & location == "small pool")
+env_globalSm <- as.data.frame(otu_table(psEnvsmall))
+env_globalSm$sampleSum <- rowSums(env_globalSm)
+env_globalSm$totalCount <- sum(env_globalSm$sampleSum)
+env_globalSm$GA <- (env_globalSm$sampleSum / env_globalSm$totalCount)
+
+# 2. create df with global abundance (GA) in sals and environment
+envGAsmall <- as.data.frame(env_globalSm$GA)
+salGAsmall <- as.data.frame(sal_globalSm$GA)
+smallGA <- cbind(envGAsmall, salGAsmall)
+smallGA <- smallGA %>% 
+  rowwise() %>% 
+  filter(sum(c(`env_globalSm$GA`, `sal_globalSm$GA`)) !=0) # remove ASVs that don't show up in small pool
+plot(smallGA) # plot to check
+
+# 3. Run Kendall correlation on ASV RA
+smallKendall <- cor.test(smallGA$`env_globalSm$GA`, smallGA$`sal_globalSm$GA`, method = "kendall")
+smallPearson <- cor.test(smallGA$`env_globalSm$GA`, smallGA$`sal_globalSm$GA`, method = "spearman")
+
+smallKendall
+smallPearson
+
+## Now on most abundant ASVs
+## high abundance --------------------------------------------------------------
+smallGA_high <- smallGA %>% 
+  rowwise() %>% 
+  filter(`env_globalSm$GA` > 0.001 | `sal_globalSm$GA` > 0.001)
+
+smallKendall_high <- cor.test(smallGA_high$`env_globalSm$GA`,
+                              smallGA_high$`sal_globalSm$GA`, method = "kendall")
+smallPearson_high <- cor.test(smallGA_high$`env_globalSm$GA`,
+                              smallGA_high$`sal_globalSm$GA`, method = "spearman")
+smallKendall_high
+smallPearson_high
+
+GA_high <- bigGA %>% 
+  rowwise() %>% 
+  filter(`env_global$GA` > 0.001 | `sal_global$GA` > 0.001)
+
+bigKendall_high <- cor.test(GA_high$`env_global$GA`,GA_high$`sal_global$GA`, method = "kendall")
+bigPearson_high <- cor.test(GA_high$`env_global$GA`,GA_high$`sal_global$GA`, method = "spearman")
+
+bigKendall_high
+bigPearson_high
+
+## nicer plots to see what's up
+## plot ------------------------------------------------------------------------
+library(gghighlight)
+
+library(patchwork)
+
+smallGA$abund <- smallGA$`env_globalSm$GA`> 0.001 | smallGA$`sal_globalSm$GA` > 0.001
+
+(smallPlot <- ggplot(data = smallGA,
+                    aes(x = `sal_globalSm$GA`, y = `env_globalSm$GA`)) +
+  geom_point(size = 3, alpha = 0.5, aes(color = abund)) + 
+    labs(title = "Small pool",
+         subtitle = "All ASVs: tau = -0.20, p < 2.2e-16 \nASVs > 0.001: tau = -0.40, p < 2.2e-16",
+                 x = "spotted salamander RA",
+         y = "environmental RA") + 
+    scale_color_manual(values = c("black","#FF3030")) +
+    theme(legend.position = "none") 
+    #xlim(0, 0.03) +
+    #ylim(0, 0.03)
+)
+
+bigGA$abund <- bigGA$`env_global$GA`> 0.001 | bigGA$`sal_global$GA` > 0.001
+
+(bigPlot <- ggplot(data = bigGA,
+                  aes(x = `sal_global$GA`, y = `env_global$GA`, fill = abund)) + 
+    geom_point(size = 3,alpha = 0.5, aes(color = abund)) +
+    labs(title = "Big pool",
+         subtitle = "All ASVs: tau = -0.31, p < 2.2e-16 \nASVs > 0.001 RA: tau = -0.23, p = 1.7e-12",
+         x = "spotted salamander RA",
+         y = "environmental RA") + 
+    scale_color_manual(values = c("black","#FF3030")) +
+    theme(legend.position = "none")  
+    #xlim(0, 0.03) +
+    #ylim(0, 0.03)
+    #scale_y_continuous(expand = c(0, 0)) + 
+    #scale_x_continuous(expand = c(0, 0))
+)
+
+bigPlot + smallPlot
+```
+
