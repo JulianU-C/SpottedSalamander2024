@@ -1,0 +1,229 @@
+---
+title: "Comparison to Owen analysis"
+author: "JUC & Carly Muletz Wolz"
+date: "Today"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+#### Colors, plot themes
+```{r, echo=FALSE, warning=FALSE, message = FALSE}
+# Colors I like
+stack <- c("#3A5FCD", "#EEAD0E","#858585")
+abundPlotColorsL <- c("#949494", "#0000FF", "#FF4040", "#7FFFD4", "#FF8C00", "#9932CC", "#FFB90F", "#8B4500", "#FFFFFF", "#8B8B00", "#000080", "#BC8F8F", "#00868B", "#7B68EE", "#FF1493", "#FFD700", "#00688B", "#EE6AA7", "#8B668B", "#522909","#7EC0EE", "#B452CD","#050505", "#0075Ff", "#7FFF09","#00EE00", "#008B00", "#006400", "#98F5FF", "#C1CDCD", "#FFC125", "#FF82AB")
+bd <- c("#050505", "#0000FF", "#00EE00", "#008B00", "#006400", "#98F5FF", "#C1CDCD", "#FFC125", "#FF8C00", "#FF82AB", "#B452CD", "#FFFFFF")
+```
+
+#### Load libraries, set wd, load data
+```{r load data, message=F, warning = F, results='hide'}
+library(phyloseq)
+library(ape)
+library(vegan)
+library(ggplot2)
+library(pairwiseAdonis)
+library(car)
+library(magrittr)
+library(dplyr)
+library(gridExtra)
+library(tidyr)
+library(rcompanion)
+library(Hmisc)
+
+
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis/Compare to Osborne24")
+
+featureTab <- otu_table(read.csv("osborne16S_feature_table_final.csv", header = T,
+                                 row.names = 1, check.names = F), taxa_are_rows = TRUE)
+dim(featureTab) # 2122 x 42
+
+# Read taxonomy info in, make matrix and compatible for phyloseq
+taxonomy <- tax_table(as.matrix(read.csv("osborne16S_taxonomy.csv", row.names = 1)))
+meta_data <- sample_data(read.csv("osborne16S_meta_Final.csv", header = T, row.names = 1, check.names = F))
+
+# Merge it all together
+os16F4 <- merge_phyloseq(featureTab, taxonomy, meta_data) #seqs) #tree)
+
+# set theme for plots
+theme_set(theme_bw() +
+            theme_classic() + 
+            theme(text = element_text(size = 12)))
+```
+
+#### Data manipulation
+```{r, data manip, message=F, warning = F, results='hide'}
+# rarefy
+os16F4Rare <- rarefy_even_depth(os16F4, replace = FALSE, rngseed = 13)
+## Make dataframe of metadata for diversity analyses and get info on sample sizes
+df_osRare <- as(sample_data(os16F4Rare), "data.frame")
+
+pond <- c("Notophthalmus viridescens", "Ambystoma jeffersonianum", "Ambystoma maculatum")
+forest <- c("Plethodon cinereus", "Plethodon glutinosus", "Plethodon hoffmani")
+stream <- c("Desmognathus monticola", "Desmognathus fuscus", "Desmognathus ochrophaeus",
+            "Gyrinophilus porphyriticus", "Eurycea bislineata")
+df_osRareAlpha <- df_osRare %>% 
+  filter(Organism == "skin metagenome") %>% 
+  mutate(habitat = case_when(HOST %in% pond ~ "pond",
+                             HOST %in% forest ~ "forest",
+                             HOST %in% stream ~ "stream")) %>% 
+  mutate(HOST_short = gsub("^(\\w)\\w+\\s", "\\1. ", HOST))
+
+```
+
+#### Alpha diversity analyses
+
+**Rarified dataset**
+
+```{r, alphaRare, warning=FALSE, message=FALSE}
+
+# box plots: richness
+richnessRare <- ggplot(data = df_osRareAlpha, aes(x = sample_type, y = log10(S.obs_rare))) +
+  geom_boxplot(width = 0.5,size = 1, fill = c("#1C86EE","#FFC125")) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("ASV richness (log10)") +
+  xlab("") +
+  scale_x_discrete(labels = c("Vernal pool", "Adult salamander"))
+
+(antiRichnessRare <- ggplot(data = df_osRareAlpha, aes(x = HOST_short, y = S.obs_antiRare)) +
+  geom_boxplot(width = 0.5,size = 1) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("AntiBd Richness") +
+  xlab("") +
+  facet_wrap(~ habitat, scales = "free_x", ncol = 1)
+)
+
+(antiRARare <- ggplot(data = df_osRareAlpha, aes(x = HOST_short, y = AntiBdRARare)) +
+  geom_boxplot(width = 0.5,size = 1) +
+  geom_jitter(width = 0.2, size = 2) +
+  ylab("AntiBd Relative Abundance") +
+  xlab("") +
+  facet_wrap(~ habitat, scales = "free_x", ncol = 1)
+)
+
+df_ambystoma <- df_osRareAlpha %>%
+  filter(HOST %in% c("Ambystoma jeffersonianum", "Ambystoma maculatum"))
+
+t.test(AntiBdRARare ~ HOST, data = df_ambystoma)
+```
+
+The rarified data set is in agreement with the unrarified - will report unrarified stats.
+
+#### Beta diversity analyses
+
+**Rarified**
+```{r, betaRare, out.width= "75%", warning=FALSE, message=FALSE}
+## Bray curtis
+salsOnly <- subset_samples(os16F4Rare, Organism == "skin metagenome")
+df_salsOnly <- as(sample_data(salsOnly), "data.frame")
+df_salsOnly <- df_salsOnly %>% mutate(habitat = case_when(HOST %in% pond ~ "pond",
+                             HOST %in% forest ~ "forest",
+                             HOST %in% stream ~ "stream"))
+bcR <- phyloseq::distance(salsOnly, "bray")
+adonis2(bcR ~ HOST * habitat, data = df_salsOnly)
+
+# bray-curtis; nmds
+bcOrdR <- ordinate(salsOnly, "NMDS",bcR)
+brayCurtisR <- plot_ordination(salsOnly, bcOrdR, color = "HOST") + 
+  geom_point(size = 2, aes(shape = geo_loc_name)) +
+  scale_color_manual(values = bd) +
+  scale_shape_manual(values = c(14, 15, 16, 17), 
+                     labels = c("Gambrill, MD", "Front Royal, VA", "GWJNF, VA",
+                                "Mount Marlyand, MD")) +
+  labs(shape = "Location", color = "Species")
+
+plot(brayCurtisR)
+
+## How different are just the jefferson sals
+ambystoma <- subset_samples(os16F4Rare, grepl("WOF|WSS|WSB", sample_names(os16F4Rare)))
+ambystoma1 <- subset_samples(ambystoma, HOST != "Notophthalmus viridescens")
+df_ambystoma <- as(sample_data(ambystoma1), "data.frame")
+
+bcA <- phyloseq::distance(ambystoma1, "bray")
+adonis2(bcA ~ HOST, data = df_ambystoma)
+
+# bray-curtis; nmds
+bcOrdA <- ordinate(ambystoma1, "NMDS",bcA)
+
+sample_data(ambystoma1)$HOST <- as.factor(sample_data(ambystoma1)$HOST)
+sample_data(ambystoma1)$HOST <- factor(sample_data(ambystoma1)$HOST,
+                                       levels = c("Ambystoma jeffersonianum",
+                                                 "Ambystoma maculatum",
+                                                 "not applicable", ""))
+
+brayCurtisA <- plot_ordination(ambystoma1, bcOrdA, color = "HOST") + 
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#050505", "#0000FF","#949494","#1E90FF"),
+                     labels = c("Jefferson salamander", "Spotted salamander",
+                                "Jefferson environment", "Spotted environment")) +
+  labs(color = "Sample type")
+
+brayCurtisA
+```
+
+## For reviewer 1, that cunt
+```{r}
+familyAmby <- ambystoma1 %>% 
+  tax_glom(taxrank = "Family", NArm = T) %>% 
+  merge_samples("HOST") %>% 
+  transform_sample_counts(function(x) {x/sum(x)}) %>% 
+  psmelt() %>% 
+  arrange(Family)
+familyAmby$Family[familyAmby$Abundance < 0.02] <- "< 2% abundance"
+familyAmby$Family <- as.factor(familyAmby$Family)
+familyAmby$Sample <- as.factor(familyAmby$Sample)
+familyAmby$Sample <- factor(familyAmby$Sample, levels = c("Ambystoma jeffersonianum",
+                                                 "not applicable","Ambystoma maculatum",
+                                                 ""))
+
+bd <- c("#696969","#FF4040", "#FFD700", "#FF7F00", "#D2691E", "#228B22", "#7FFFD4", "#1C86EE", "#00008B", "#8A2BE2","#8B2323", "#CDAD00", "#556B2F", "#FFE4C4", "#CDB79E", "#000000", "#104E8B", "#00688B", "#FF00FF", "#8B8B49", "#CDCD00", "#EEEE00", "#2E8B57", "#4EEE94", "#43CD80", "#C0FF3E", "#483D8B", "#1874CD")
+
+c <- c("#696969", "#7FFFD4", "#66CDAA", "#458B74", "#FF4040", "#CD3333", "#8B2323","#1E90FF", "#1874CA", "#104E8B", "#FFD700", "#CDAD00", "#8B7500", "#ADFF2F", "#00EE00", "#008B00", "#E066FF", "#7A378B", "#7B68EE", "#FFB90F", "#FF8C00", "#EE7600", "#F0FFFF", "#C1CDCD", "#838B8B", "#F5F5DC", "#EED5B7", "#0000FF", "#FF1493", "#48D1CC")
+
+abundAmby <- ggplot(data = familyAmby, aes(x = Sample, y = Abundance, fill = Family)) +
+    geom_bar(aes(), stat = "identity", position = "stack") +
+    labs(x = "", y = "Relative abundance") +
+  scale_fill_manual(values = c, guide = guide_legend(ncol = 3)) +
+  scale_x_discrete(labels = c("Jefferson salamander", "Jefferson environment",
+                              "Spotted salamander", "Spotted environment")) +
+  theme(legend.title.position = "top",
+        legend.key.width = unit(0.55, "cm"),  # Adjust width of legend keys
+        legend.position = "bottom",  # Keep the legend on the right
+        legend.box = "vertical",
+        legend.box.spacing = unit(0.5, "cm"),
+        legend.direction = "vertical",  # Stack legend items vertically
+        legend.box.margin = margin(0, 0, 0, 0), # Remove extra space around legend
+        legend.key.height = unit(0.2, "cm")) # Adjust the height of each legend key 
+
+abundAmby
+
+
+phylumAmby <- ambystoma1 %>% 
+  tax_glom(taxrank = "Phylum", NArm = T) %>% 
+  merge_samples("HOST") %>% 
+  transform_sample_counts(function(x) {x/sum(x)}) %>% 
+  psmelt() %>% 
+  arrange(Phylum)
+phylumAmby$Phylum[phylumAmby$Abundance < 0.01] <- "< 1% abundance"
+phylumAmby$Phylum <- as.factor(phylumAmby$Phylum)
+phylumAmby$Sample <- as.factor(phylumAmby$Sample)
+phylumAmby$Sample <- factor(phylumAmby$Sample, levels = c("Ambystoma jeffersonianum",
+                                                 "not applicable","Ambystoma maculatum",
+                                                 ""))
+abundAmby2 <- ggplot(data = phylumAmby, aes(x = Sample, y = Abundance, fill = Phylum)) +
+    geom_bar(aes(), stat = "identity", position = "stack") +
+    labs(x = "", y = "Relative abundance") +
+  scale_fill_manual(values = c, guide = guide_legend(ncol = 3)) +
+  scale_x_discrete(labels = c("Jefferson salamander", "Jefferson environment",
+                              "Spotted salamander", "Spotted environment")) +
+  theme(legend.title.position = "top",
+        legend.key.width = unit(0.55, "cm"),  # Adjust width of legend keys
+        legend.position = "bottom",  # Keep the legend on the right
+        legend.box = "vertical",
+        legend.box.spacing = unit(0.5, "cm"),
+        legend.direction = "vertical",  # Stack legend items vertically
+        legend.box.margin = margin(0, 0, 0, 0), # Remove extra space around legend
+        legend.key.height = unit(0.2, "cm")) # Adjust the height of each legend key 
+
+abundAmby2
+```
+
+

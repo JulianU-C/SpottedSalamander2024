@@ -1,0 +1,567 @@
+---
+title: "spotted16SPreProcess.Rmd"
+author: "JUC and CRMW"
+date: "11/24/2024"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Read in data and remove singletons
+```{r}
+# Spotted/Zeteki 16S PRE-process Data Analysis   ###
+#setwd("/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files")
+setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis/Compare to Osborne24")
+# Load packages
+library(dplyr)
+library(phyloseq)
+library(ape)
+library(vegan)
+library(ggplot2)
+```
+
+
+```{r}
+# this is site by species matrix, need row.names = 1 to have phyloseq read it
+featureTab <- read.csv("osborne16S_feature_table1.csv", header = T, row.names = 1, check.names=FALSE)
+
+# make compatible for phyloseq format
+featureTab = otu_table(featureTab, taxa_are_rows = TRUE)
+## 10534 taxa by 49 samples
+dim(featureTab)
+head(featureTab)
+sort(sample_sums(featureTab))
+
+# Read taxonomy info in, make matrix and compatible for phyloseq
+taxonomy <- tax_table(as.matrix(read.csv("osborne16S_taxonomy.csv", row.names = 1)))
+
+#quantsSpotted <- read.csv("quantsSpotted.csv")
+#meta <- read.csv("spot_md.csv")
+#metaSpot <- merge(meta, quantsSpotted, by = c("AmphibianID"))
+#write.csv(metaSpot, file = "spot_mdQuant.csv", row.names = FALSE)
+#metaPre <- read.csv("SraRunTable.csv")
+#metaPre <- metaPre[!duplicated(metaPre$Sample_id), row.names = F]
+#write.csv(metaPre, "osborne16S_meta.csv")
+meta_data <- sample_data(read.csv("osborne16S_meta.csv", header = T, row.names = 1))
+# SampleID is now row.names, still useful to have SampleID in metadata so add in
+meta_data$Sample_id <- row.names(meta_data)
+
+#Read in sequence data, may need if you want to look at or subset the DNA sequences at some point
+library(Biostrings)
+seqs <- readDNAStringSet("osborne16S_DNAsequences.fasta")
+
+# You can also add a phylogenetic tree here, if you have one
+# library(ape)
+# tree = read.tree("FinalRFiles/exported-tree/SalAMPtree.nwk")
+
+# Merge it all together
+g16 <- merge_phyloseq(featureTab, taxonomy, meta_data, seqs) #tree)
+g16
+
+## 10534 taxa by 49 samples
+dim(featureTab)
+sample_names(featureTab)
+
+# WSSP16 should be WSBP16 _ i'm going to leave alone
+# We have a WSSP-E1 and WSBPE1 - these are different Environment samples
+# some idiot gave them nearly identical names >:(
+unique1 <- sample_names(g16)
+unique2<- sample_names(featureTab)
+sym_diff <- function(a,b) setdiff(union(a,b), intersect(a,b))
+sym_diff(unique1, unique2)
+setdiff(unique1, unique2)
+setdiff(unique2, unique1)
+
+sum(sample_sums(g16)) # 440718
+
+
+sort(sample_sums(g16))
+
+## Filter singletons (only occur on 1 individual), seems to be a lot of ASVs with little information
+## This says needs to occur at least 1 time on at least 2 individual
+g16F <- filter_taxa(g16, function (x) {sum(x > 0) >1}, prune=TRUE)
+
+## Note 10534 taxa and now 2311. I always remove singletons to individuals (note some people call singletons just 1 sequence) as I believe many are spurious. Can check the standards to verify this also, difficult here with this data though due to contaminants in standards. Had to do strong filtering here
+g16
+g16F
+
+## Lost ~ 40k taxa and ~800k sequences
+sum(sample_sums(g16))
+sum(sample_sums(g16F))
+
+## REMOVE chloroplast and eukaryotic sequences
+get_taxa_unique(g16F, "Kingdom")
+
+## The NA may be host 16S rRNA, could blast if of interest
+Euk <- subset_taxa(g16F, Kingdom %in% c("Eukaryota", NA))
+
+## Just NAs
+#tax_table(Euk) did not pickup any Eukaryota 
+
+g16F <-  subset_taxa(g16F, Kingdom %in% c("Bacteria", "Archaea"))
+
+g16F # 2356 taxa
+## Realize that subset_taxa removes all NAs if there is an NA. see subset_taxa help file
+## So at this step we are removing Cyanobacteria and all phyla with an NA
+g16F <- subset_taxa(g16F, Phylum != "Cyanobacteria")
+g16F <- subset_taxa(g16F, Phylum != "Cyanobacteriota") # this is the same right??
+g16F # 2215 taxa
+
+## we should have also removed mitochondria which you would do with this code, which should get past the issue of NAs
+## No NAs at Family level would be removed
+g16F <- subset_taxa(g16F, (Family!="Mitochondria") | is.na(Family))
+g16F # 24002 taxa
+```
+
+
+### Let's look at the positive standards first, then remove for contaminant filtering
+### We recover all the bacterial taxa that should be there and in relatively similar relative abundances to what is expected, but there are extra that shouldn't be there
+#### See ZymoStandards-Taxonomy-Compare for more info
+```{r}
+# make sure dimensions are correct, ensure you're calling correct col names
+dim(sample_data(g16F)) 
+colnames(sample_data(g16F)) 
+head(sample_data(g16F)) 
+
+# we did not pool PPC due to pipette error, only PXC is the positive control
+MicroStClean <- subset_samples(g16F,
+                               Sample_id %in% c("PXC04824"))
+
+# Are there ASVs that are lingering? Just ASVs in the OTU_table, but not present in controls, remove next
+# okay originally = 2275 when I include PPC, but just PXC = 2304, so 42 lingering
+sum(taxa_sums(MicroStClean) == 0)
+
+# getting rid of ASVs that are not in samples of interest
+MicroStClean <- filter_taxa(MicroStClean, function(x) sum(x) !=0, TRUE)
+
+# normalize sample counts
+MicroStClean <- transform_sample_counts(MicroStClean, function(x) x/sum(x))
+
+# convert OTU table to dataframe
+otu_table(MicroStClean)
+dfo <- as.data.frame(otu_table(MicroStClean))
+
+## column 6 is genus, or change to the column of genus
+tax_table(MicroStClean)[,6]
+dft <- as.data.frame(tax_table(MicroStClean)[,6])
+dfpc <- cbind(dfo, dft)
+#Controls look concerning, there are contaminants here we need to remove. They are all low abundance though, but
+## need to be filtered out of regular samples too
+## Let's see if decontam removes them later also
+
+dfpc[order(dfpc$Genus), ]
+
+#Check positive controls have correct bacteria present. Can look in feature table two and taxonomy files. Will also tell you below. Take into account there can be different names for same bacteria species due to re-classification
+### Genus	Truth, same for both extraction and PCR controls
+#Bacillus	0.174
+#Enterococcus	0.099
+#Escherichia/Shigella	0.101
+#Lactobacillus	0.184
+#Listeria	0.141
+#Pseudomonas	0.042
+#Salmonella	0.104
+#Staphylococcus	0.155
+
+## can write a file too and make plot
+site_species <-as(otu_table(MicroStClean), "matrix")
+taxonomy <- as(tax_table(MicroStClean), "matrix")
+write.csv(cbind(site_species, taxonomy), "ZymoStandards.csv")
+
+st <- psmelt(MicroStClean) # create dataframe from phyloseq object
+st <- subset(st, Abundance > 0.01)
+## setting abundance > 0.01, we can see these are the controls, but have contaminants
+## These contaminants appear to be reagent contaminants as they are in neg and positive extraction controls
+
+#plot
+plot.rel.ab2 <- ggplot(data=st, aes(x=Sample, y=Abundance, fill=Genus))
+plot.rel.ab2 + geom_bar(aes(), stat="identity", position="stack")  +
+  ylab("Relative abundance (% of total sequences)") +theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + theme_bw()  +
+  theme_classic()+ labs(x = "")+ theme(text = element_text(size = 20))  
+
+# Let's come back and look at these after filtering contaminants. Copied below when you need to look at it again
+
+# Go back to before we removed singletons, interested if singletons are showing up in standards...
+MicroStPrePre <- subset_samples(g16, sample_type %in% c("positive extraction control"))
+
+MicroStPrePre <- filter_taxa(MicroStPrePre, function(x) sum(x) !=0, TRUE)
+MicroStClean
+## Can see 15 more ASV contaminants in positive controls here if you don't remove singletons
+MicroStPrePre
+
+otu_table(MicroStPrePre)
+tax_table(MicroStPrePre)
+
+### good to check. Important to remove singletons! But, we have more contaminants here than usual. This was done is the modern lab? Wondering why I'm getting so many contams, maybe check if this is the one where I accidentally doubled up on the controls OR had bands in the negs. It is, but I double into the PXC and the NXC, NPC, and PPC had no bands?? We didn't even add anything from this well when pooling????
+```
+
+
+### Contaminant filter
+#### See more: https://benjjneb.github.io/decontam/vignettes/decontam_intro.html
+```{r}
+####----Decontam----####
+citation ("decontam")
+library(decontam)
+
+## Says in paper that combined method provides the best bimodal distribution 
+## suggesting that is will be the more robust classification when both data types
+## are present, which we have
+
+## NOTE: you need to put in your DNA quant readings that you used for pooling your library into the metadata file and call it quant_reading. Look a the tutorial indicated above
+## ALSO later you need a column that says Sample_or_Control
+
+# continue analysis - add column is.neg to ID negative controls
+sample_data(g16F)$is.neg <- sample_data(g16F)$Organism %in% c("negative", "negative pcr control", 
+                                                              "negative extraction control")
+
+##it will filter out samples with zero total count frequencies, this will cause an error when you go to plot_frequency. Below, I fixed it by removing the zero counts before doing the isContaminant(). 
+#If you do not prune samples with 0 counts, will cause error when plotting
+# I'm also going to remove sample we didn't pool for sequencing (PPC)
+non.zero <- sample_sums(g16F) > 0
+ps.nonzero <- prune_samples(non.zero, g16F)
+#ps.nonzero <- subset_samples(ps.nonzero, SampleID != c("PPC090524"))
+# Then go forward with ps.nonzero 
+
+# Inspect library sizes
+df <- as.data.frame(sample_data(ps.nonzero))
+df$LibrarySize <- sample_sums(ps.nonzero)
+df <- df[order(df$LibrarySize),]
+df$Index <- seq(nrow(df))
+
+
+## Using combined based on paper recommendation is preferred
+## because of concern of contaminants we are using either
+contamdf.combined <- isContaminant(ps.nonzero, method="prevalence", neg="is.neg", threshold = 0.25) 
+
+# I set a stricter threshold than default, didn't trust it was IDing enough contaminants based on the prevalence plot
+
+## If error, make sure all have quant readings. For too low qubit readings - I put 0.05. In this data set, all samples have higher quant readings
+#sample_data(ps.nonzero)$quant_reading
+table(contamdf.combined$contaminant) # 132 true contaminants
+
+head(which(contamdf.combined$contaminant))
+hist(contamdf.combined$contaminant)
+
+## Can plot to look at
+# transform sample counts into presence/absence format
+ps.pa <- transform_sample_counts(ps.nonzero, function(abund) 1*(abund>0))
+# prune negative controls
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$is.neg == TRUE, ps.pa)
+# prune positive samples
+ps.pa.pos <- prune_samples(sample_data(ps.pa)$is.neg != TRUE, ps.pa)
+# Make data.frame of prevalence in positive and negative samples
+df.pa <- data.frame(pa.pos = taxa_sums(ps.pa.pos),
+                    pa.neg = taxa_sums(ps.pa.neg),
+                    contaminant = contamdf.combined$contaminant)
+# plot
+ggplot(data=df.pa, aes(x=pa.neg, y=pa.pos, color=contaminant)) + geom_point() +
+  xlab("Prevalence (Control)") + ylab("Prevalence (swab)")
+
+
+## row numbers of some of the contaminants (NOT ASV numbers)
+which(contamdf.combined$contaminant)
+#[1]    8   52   69  136  138  220  249  262  349  352  357  373  436  478  535  557  573  581  626  629  639  642  653
+#[24]  670  681  694  711  724  799  821  859  868  889  897  903  929  950  958 1012 1039 1063 1064 1066 1110 1135 1155
+#[47] 1181 1273 1346 1368 1387 1405 1431 1462 1463 1501 1507 1536 1551 1559 1566 1592 1606 1636 1658 1675 1678 1690 1705
+#[70] 1712 1747 1756 1767 1771 1775 1805 1837 1839 1867 1869 1884 1886 1921 1964 1975 1980 1989 2025 2068 2073 2093 2138
+#[93] 2229 2234 2235 2237
+
+## So let's plot some that are contaminants and some that aren't
+#here you can put specific contams or non-contams you want to look at
+plot_frequency(ps.nonzero, taxa_names(ps.nonzero)[c(10, 1370)], conc="quant_reading") + 
+  xlab("DNA Concentration")
+
+#here you can put the number of contams you want to look at. I looked at 16 of them here
+# Note some are found by either frequency or prevalence and may not follow the line tightly if prevalence based
+plot_frequency(ps.nonzero, taxa_names(ps.nonzero)[sample(which(contamdf.combined$contaminant),16)], conc="quant_reading") + xlab("DNA Concentration")
+
+```
+
+
+#### Delete Contaminants
+```{r}
+#Need to delete ASVs found as contaminants by either method
+g16F2 <- prune_taxa(!contamdf.combined$contaminant, ps.nonzero) 
+
+sum(sample_sums(ps.nonzero)) # 326011
+sum(sample_sums(g16F2)) # 316204
+sort(sample_sums(g16F2))
+sort(sample_sums(g16F))
+## still contaminants here? Are negative controls supposed to be at 0?
+write.csv(as(otu_table(g16F2), "matrix"), "osborne16S_feature_table_afterDecontam.csv")
+
+library(magrittr)
+## probably a good option to also run generally for any dataset after decontam
+controls <- g16F2 %>%
+  subset_samples(is.neg == TRUE) 
+
+controls <- prune_taxa(taxa_sums(controls) > 0, controls)
+controls # 19 taxa
+controls@sam_data
+
+# remove contaminants in negative controls that occur more than 1 sequence in more than 2 samples
+controls <- filter_taxa(controls, function(x){sum(x > 0) > 2}, prune = TRUE)
+tax_table(controls) #27 taxa 
+controls
+row.names(tax_table(controls)) #"ASV2""ASV3""ASV4""ASV52""ASV69""ASV102""ASV237"
+extraCon <- row.names(tax_table(controls))
+
+# Need an ASV ID in the taxonomy table to match to
+tax_table(g16F2) <- cbind(tax_table(g16F2), ASV=taxa_names(g16F2))
+g16F3 <- subset_taxa(g16F2, !(ASV %in% extraCon))
+write.csv(as(otu_table(g16F3), "matrix"), "osborne16S_feature_table_afterDecontamafterExtra.csv")
+sort(sample_sums(g16F3))
+
+```
+
+```{r}
+## Let's look at positive control again, see if contaminant filtering helped
+## Be careful here as decontam could potentially remove an ASV that is in the standards
+#MicroStClean2 <- subset_samples(g16F3, organism %in% c("positive pcr control"))
+
+## getting rid of ASvs that are not in samples of interest
+MicroStClean2 = filter_taxa(MicroStClean2, function(x) sum(x) !=0, TRUE)
+
+otu_table(MicroStClean2)
+otu_table(MicroStClean)
+## problem here is contaminant filtering removed some of the standards ASVs....
+## can write a file too and still concerned, so removing any ASVs in positive controls too
+
+site_species <-as(otu_table(MicroStClean2), "matrix")
+taxonomy <- as(tax_table(MicroStClean2), "matrix")
+write.csv(cbind(site_species, taxonomy), "ZymoStandards2.csv")
+
+## removing any ASVs found in more than 2 controls (positive and negative) with more than 1 sequence
+controls2 <- g16F2 %>%
+  subset_samples(Organism %in% c("positive pcr control", "positive extraction control") |
+                   is.neg == TRUE)
+
+controls2 <- prune_taxa(taxa_sums(controls2) > 0, controls2) #133 taxa
+controls2
+controls2@sam_data
+
+controls2 <- filter_taxa(controls2, function(x){sum(x > 0) > 2}, prune = TRUE)
+tax_table(controls2) #25 TAXA removed
+controls2
+
+row.names(tax_table(controls2))
+
+extraCon2 <- row.names(tax_table(controls2))
+
+g16F3 <-  subset_taxa(g16F3, !(ASV %in% extraCon2))
+
+sort(sample_sums(g16F3))
+
+g16F3 <- subset_samples(g16F3, !(Organism %in% c("positive pcr control", "positive extraction control", "negative pcr control", "negative", "negative extraction control")))
+
+g16F # 2207 taxa
+g16F2 # 2112 taxa
+g16F3 # 2086 taxa
+## 124 total removed
+sum(sample_sums(g16F)) # 326972
+sum(sample_sums(g16F2)) # 316204
+sum(sample_sums(g16F3)) # 212055
+## after this additional filtering, the data looks up to par (I think?)
+## Use this file going forward
+write.csv(as(otu_table(g16F3), "matrix"), "osborne16S_feature_table_final.csv")
+
+refseq(g16F3)
+
+#g16F3  %>%
+      #refseq() %>%
+      #Biostrings::writeXStringSet("spotted16S_DNAsequencesFiltv2.fna", append=FALSE,
+      #                            compress=FALSE, compression_level=NA, format="fasta")
+```
+
+######### ALPHA DIVERSITY + Bd-inhibitory Calculate and add to mapping file with seq counts  ############
+
+```{r Estimate richess}
+
+featureTab2 <- read.csv("osborne16S_feature_table_final.csv", header = T, row.names = 1, check.names = F)
+
+# make compatible for phyloseq format
+featureTab2 <-  otu_table(featureTab2, taxa_are_rows = TRUE)
+
+dim(featureTab2) # 2122 taxa by 42 samples
+
+# Read taxonomy info in, make matrix and compatible for phyloseq
+taxonomy <- tax_table(as.matrix(read.csv("osborne16S_taxonomy.csv", row.names = 1)))
+meta_data <- sample_data(read.csv("osborne16S_meta.csv", header = T, row.names = 1))
+seqs <- readDNAStringSet("osborne16S_DNAsequences.fasta")
+
+# Merge it all together
+g16F4 <- merge_phyloseq(featureTab2, taxonomy, meta_data, seqs) #tree)
+g16F4
+
+# Look at sequence count difference
+sort(sample_sums(g16F4))
+sum(sample_sums(g16F4)) # 212055
+
+# plot read counts, if we cut at 1000 will lose 3 samples from the small pool (16 is actually from big pool) and 2 from big pool
+readcounts <- sample_sums(g16F4)
+rcdf <- data.frame(Sample = names(readcounts), Count = readcounts)
+ggplot(data = rcdf, aes( x = 1, y = Count)) +
+  geom_jitter() +
+  scale_y_log10()
+
+# prune low coverage, lose 3 amphibian samples
+g16F4 <- prune_samples(sample_sums(g16F4)>2000, g16F4)
+sort(sample_sums(g16F4))
+# Sequencing difference. Look at rarefaction to see where to cut
+# You want this number to be less than 10x
+max(sample_sums(g16F4))/min(sample_sums(g16F4))
+
+
+library("ranacapa")
+p <- ggrare(g16F4, step = 100, se = FALSE)
+## NOTE: change the xlim based on your data or ability to see lower sequence numbers
+p + theme_bw() + theme_classic() + xlab("Sequence count") + ylab("Bacterial ASV richness") +
+  theme(text = element_text(size = 15)) + labs(color='Sample type') #+xlim(0,50000)
+
+p + theme_bw() + theme_classic() + xlab("Sequence count") + ylab("Bacterial ASV richness") +
+  theme(text = element_text(size = 15)) + labs(color='Sample type') +xlim(0,20000)
+
+## Generally, we want more like 5000 sequences per sample for amphibian skin communities to reach asymptote of curve, I'm leaning towards rarefying at 2000 - because this difference is less than 10x I'm going to do rare/un-rared analysis in parallel
+
+
+## Need to first calculate alpha on non-rarefied dataset just to have
+df_g16 <- as(sample_data(g16F4), "data.frame")
+library(plyr)
+#info <- ddply(df_g16, .(location, sample_type, sex), summarize, sampled=length(location))
+#info
+
+t_otu4 <-t(as(otu_table(g16F4), "matrix"))
+library(vegan)
+AD <- estimateR(t_otu4)
+AD <- t(as.data.frame(AD))
+
+#need to have both alpha and df having the same column info
+## Add sequence coverage info
+seqs <- as.data.frame(sample_sums(g16F4))
+seqs$SampleID <- row.names(seqs)
+
+#now merge to get sequence counts and alpha estimates in mapping file
+alpha_df <- merge(df_g16, AD,  by = "row.names")
+alpha_df$SampleID <- alpha_df$Row.names
+alpha_df <- merge(alpha_df, seqs, by = "SampleID")
+row.names(alpha_df) <- alpha_df$Row.names
+
+g16F4Rare <- rarefy_even_depth(g16F4, replace=FALSE, rngseed = 13)
+
+##message:`set.seed(13)` was used to initialize repeatable random subsampling.
+#Please record this for your records so others can reproduce.
+#Try `set.seed(13); .Random.seed` for the full vector
+#...
+#30 OTUs were removed because they are no longer present in any sample after random subsampling
+
+## If correct, should all be at same sample sum, 2022
+sort(sample_sums(g16F4Rare))
+
+t_otuR <-t(as(otu_table(g16F4Rare), "matrix"))
+
+## Add sequence coverage info
+seqsRare <- as.data.frame(sample_sums(g16F4Rare))
+seqsRare$SampleID <- row.names(seqsRare)
+
+## ADD alpha estimates for rarefied dataset. WE are using this for analyses, but if you have even coverage <10x variation then you don't need to rarefy. I have rationale for this if interested
+AD2 <- estimateR(t_otuR)
+AD2 <- t(as.data.frame(AD2))
+AD2
+colnames(AD2)[colnames(AD2)=="S.obs"] <- "S.obs_rare"
+colnames(AD2)[colnames(AD2)=="S.chao1"] <- "S.chao1_rare"
+colnames(AD2)[colnames(AD2)=="S.ACE"] <- "S.ACE_rare"
+
+#now merge to get rarefied sequence counts and alpha estimates in mapping file
+alpha_df_rare <- merge(AD2, seqsRare, by = "row.names")
+alpha_df_rare$SampleID <- alpha_df_rare$Row.names
+
+#now merge to get SR and PD of rarefied in mapping file
+## you could get a warning about duplicate row.names, but that's fine. Didn't here
+alpha_df2 <- merge(alpha_df, alpha_df_rare, by = "SampleID")
+
+
+## Next ANTI-Bd calculations and then metadata has all alpha and anti-Bd info needed
+## writing out now for quick analysis
+write.csv(alpha_df2, "osborne16S_meta_almostFinal.csv", row.names = F)
+
+```
+
+## ANTI-Bd bac calculations
+```{r}
+# I only exported the ASVs that matched at 100%
+my_antiBd <- read.csv("blastHits_2023strict.csv", header = T, stringsAsFactors = F)
+# phyloseq expects a vector not a dataframe
+my_antiBd <- my_antiBd$ASV
+str(my_antiBd)
+
+## Need an ASV ID in the taxonomy table to match to
+tax_table(g16F4Rare) <- cbind(tax_table(g16F4Rare), ASV=taxa_names(g16F4Rare))
+g16AntiRare <-  subset_taxa(g16F4Rare, ASV %in% my_antiBd)
+
+tax_table(g16F4) <- cbind(tax_table(g16F4), ASV=taxa_names(g16F4))
+g16Anti <-  subset_taxa(g16F4, ASV %in% my_antiBd)
+
+## Add estimated anti-Bd bac richness to metadata
+g16AntiA <- as(sample_data(g16AntiRare), "data.frame")
+t_otu7A <-t(as(otu_table(g16AntiRare), "matrix"))
+
+g16AntiAU <- as(sample_data(g16Anti), "data.frame")
+t_otu7AU <-t(as(otu_table(g16Anti), "matrix"))
+
+library(vegan)
+AD3 <- estimateR(t_otu7A)
+AD3 <- t(as.data.frame(AD3))
+head(AD3)
+## distinguish them
+colnames(AD3)[colnames(AD3)=="S.obs"] <- "S.obs_antiRare"
+colnames(AD3)[colnames(AD3)=="S.chao1"] <- "S.chao1_antiRare"
+colnames(AD3)[colnames(AD3)=="S.ACE"] <- "S.ACE_antiRare"
+
+
+AD4 <- estimateR(t_otu7AU)
+AD4 <- t(as.data.frame(AD4))
+head(AD4)
+## distinguish them
+colnames(AD4)[colnames(AD4)=="S.obs"] <- "S.obs_anti"
+colnames(AD4)[colnames(AD4)=="S.chao1"] <- "S.chao1_anti"
+colnames(AD4)[colnames(AD4)=="S.ACE"] <- "S.ACE_anti"
+
+## Add sequence coverage info
+seqsAntiRare <- as.data.frame(sample_sums(g16AntiRare))
+seqsAntiRare$SampleID <- row.names(seqsAntiRare)
+
+seqsAnti <- as.data.frame(sample_sums(g16Anti))
+seqsAnti$SampleID <- row.names(seqsAnti)
+
+#now merge to get rarefied sequence counts and alpha estimates in mapping file of anti-Bd bac
+alpha_df_antiRare <- merge(AD3, seqsAntiRare, by = "row.names")
+alpha_df_antiRare$SampleID <- alpha_df_antiRare$Row.names
+
+alpha_df_anti <- merge(AD4, seqsAnti, by = "row.names")
+alpha_df_anti$SampleID <- alpha_df_anti$Row.names
+
+#now merge to get SR and PD of rarefied in mapping file
+## you get a warning about duplicate row.names, but that's fine.
+alpha_df3 <- merge(alpha_df2, alpha_df_antiRare, by = "SampleID")
+alpha_df3 <- merge(alpha_df3, alpha_df_anti, by = "SampleID")
+## Now add a column Call AntiBdRA to divide sequence counts of anti-Bd bac by total sequence counts OF the RAREFIED total sequence counts = 2514 OR run this code. Need to change sample_sums(XX) to your phyloseq object. Need the `` because of weird column name?
+alpha_df3$AntiBdRARare <- NA
+alpha_df3$AntiBdRARare <- alpha_df3$`sample_sums(g16AntiRare)`/alpha_df3$`sample_sums(g16F4Rare)`
+alpha_df3$AntiBdRARare
+
+alpha_df3$AntiBdRA <- NA
+alpha_df3$AntiBdRA <- alpha_df3$`sample_sums(g16Anti)`/alpha_df3$`sample_sums(g16F4)`
+alpha_df3$AntiBdRA
+
+str(alpha_df3)
+## you could get a warning about duplicate row.names, but that's fine. 
+
+## changing name to add _anti so not to accidentally write over if I add more metadata to this file, which you know I will!
+#write.csv(alpha_df3, "osborne16S_meta_Final.csv", row.names = F)
+
+## This now is your clean file. All negs are removed and all samples with low coverage, anti-estimated, etc.
+```
+
+5/30/2025 - Julian went back to add Osborne et al. 2024 data to compare to spotted sals 2024 data
