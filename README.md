@@ -10,3 +10,6 @@ code via Julian Urrutia-Carter and Carly Muletz Wolz
 4. Kendal's tau ranked correlations for the relative abundance of ASVs between each salamander and its corresponding environment as in Rebollar et al. (2016)
 
 5. Mucosome-Bd challenge assay
+
+
+Please reach out to me for questions - Julian
