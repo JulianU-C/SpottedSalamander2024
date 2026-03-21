@@ -134,7 +134,7 @@ chunk.size <- 10000  # size of taxonomy increments
 taxonomy.species <- do.call(rbind,
                             lapply(split(c(1:nrow(taxa)), sort(c(1:nrow(taxa))%%ceiling(nrow(taxa)/chunk.size))),
                                    function(x){
-                                     return(addSpecies(taxa[x, ], "/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files/spotted 16s analysis/silva_v138.2_assignSpecies.fa.gz"))
+                                     return(addSpecies(taxa[x, ], "/Path-to/silva_v138.2_assignSpecies.fa.gz"))
                                    }))
 #  inspect the taxonomic assignments:
 taxa.print <- taxonomy.species # Removing sequence rownames for display only
