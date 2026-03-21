@@ -1,4 +1,4 @@
-setwd("C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis/Compare to Osborne24")
+setwd("spotted 16s analysis/Compare to Osborne24")
 
 library(dada2)
 library(DECIPHER)
@@ -43,7 +43,7 @@ seqtab.nochim <- removeBimeraDenovo(seqtab, method = "consensus", multithread=TR
 ## https://benjjneb.github.io/dada2/training.html
 
 taxa <- assignTaxonomy(seqtab.nochim,
-                       "C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis/silva_nr99_v138.2_toSpecies_trainset.fa.gz"
+                       "path-to/silva_nr99_v138.2_toSpecies_trainset.fa.gz"
                        , multithread=TRUE)
 
 ## this one can give an error message about memory
@@ -54,10 +54,10 @@ chunk.size <- 10000  # size of taxonomy increments
 taxonomy.species <- do.call(rbind,
                             lapply(split(c(1:nrow(taxa)), sort(c(1:nrow(taxa))%%ceiling(nrow(taxa)/chunk.size))),
                                    function(x){
-                                     return(addSpecies(taxa[x, ], "C:/Users/Owner/OneDrive - Smithsonian Institution/Spotted Salamander 2024/#R-files/spotted 16s analysis/silva_v138.2_assignSpecies.fa.gz"))
+                                     return(addSpecies(taxa[x, ], "path-to/silva_v138.2_assignSpecies.fa.gz"))
                                    }))
 # ran from 12:45 - memory limit (somehow worked fine before??)
-#taxa <- addSpecies(taxa, "/Users/Julian/Library/CloudStorage/OneDrive-SmithsonianInstitution/Spotted Salamander 2024/#R-files/spotted 16s analysis/silva_v138.2_assignSpecies.fa.gz")
+#taxa <- addSpecies(taxa, "path-to/silva_v138.2_assignSpecies.fa.gz")
 
 #  inspect the taxonomic assignments:
 taxa.print <- taxonomy.species # Removing sequence rownames for display only
